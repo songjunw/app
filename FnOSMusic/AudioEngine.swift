@@ -1,7 +1,8 @@
+import UIKit
 import AVFoundation
 import MediaPlayer
 
-/// 一首曲目。iOS 测试版直接用可流式播放的 URL。
+/// 一首曲目。url 可以是公开直链，也可以是 fnOS 签名直链（origin + uri 拼接）。
 struct Track {
     let idx: Int
     let title: String
@@ -9,6 +10,7 @@ struct Track {
     let url: String
     let ext: String
     let size: Int
+    let lrc: String   // 同名 .lrc 的签名直链（没有则为空串）
 }
 
 protocol AudioEngineDelegate: AnyObject {

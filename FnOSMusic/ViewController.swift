@@ -2,28 +2,16 @@ import UIKit
 import WebKit
 
 /// WebView 壳：加载复用安卓版的 player.html，通过注入的 window.App 桥接与原生引擎通讯。
+/// 原生层承载：NAS 登录同步（SyncManager）、播放（AudioEngine）、在线元数据（OnlineMeta）、存储（Store/Creds）。
 final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigationDelegate, AudioEngineDelegate {
 
     private var webView: WKWebView!
     private let engine = AudioEngine()
     private var tracks: [Track] = []
 
-    /// 测试歌单：使用公开可流式播放的示例音频，验证“安装/播放/锁屏连播”全链路。
-    private func sampleTracks() -> [Track] {
-        let urls = [
-            "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
-            "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
-            "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3"
-        ]
-        let names = ["示例曲目 1", "示例曲目 2", "示例曲目 3"]
-        return urls.enumerated().map { i, u in
-            Track(idx: i, title: names[i], album: "测试歌单", url: u, ext: "mp3", size: 0)
-        }
-    }
-
     override func viewDidLoad() {
         super.viewDidLoad()
-        tracks = sampleTracks()
+        loadTracksFromStore()
         engine.tracks = tracks
 
         let ctrl = WKUserContentController()
@@ -46,7 +34,6 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
         webView.isOpaque = false
         webView.backgroundColor = .black
         view.addSubview(webView)
-
         engine.delegate = self
 
         if let url = Bundle.main.url(forResource: "player", withExtension: "html"),
@@ -55,24 +42,82 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
         }
     }
 
-    /// 注入 window.App 桥接 shim，并把测试歌单塞进 window.__PLAYLIST__（player.html 启动时同步读取）。
+    // MARK: - 曲库
+
+    private func loadTracksFromStore() {
+        let store = Store.shared
+        if !store.tracks.isEmpty {
+            tracks = store.tracks.map { st in
+                let full = store.origin + st.uri
+                return Track(idx: st.idx, title: st.title.isEmpty ? st.name : st.title,
+                             album: st.album, url: full, ext: st.ext, size: Int(st.size), lrc: st.lrc)
+            }
+        } else {
+            tracks = sampleTracks()
+        }
+    }
+
+    private func sampleTracks() -> [Track] {
+        let urls = [
+            "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+            "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
+            "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
+        ]
+        let names = ["示例曲目 1", "示例曲目 2", "示例曲目 3"]
+        return urls.enumerated().map { i, u in
+            Track(idx: i, title: names[i], album: "测试歌单", url: u, ext: "mp3", size: 0, lrc: "")
+        }
+    }
+
+    // MARK: - 注入全局状态
+
     private func shimScript() -> String {
         var base = ""
         if let path = Bundle.main.path(forResource: "AppShim", ofType: "js"),
-           let s = try? String(contentsOfFile: path, encoding: .utf8) {
-            base = s
-        }
-        let playlist: [String: Any] = [
-            "tracks": tracks.map { ["i": $0.idx, "n": $0.title, "a": $0.album, "e": $0.ext, "s": $0.size] },
-            "albums": ["测试歌单"],
-            "origin": "",
-            "source": "builtin"
-        ]
-        var json = "{}"
-        if let data = try? JSONSerialization.data(withJSONObject: playlist),
-           let str = String(data: data, encoding: .utf8) { json = str }
-        return base + "\nwindow.__PLAYLIST__ = \(json);\n"
+           let s = try? String(contentsOfFile: path, encoding: .utf8) { base = s }
+        let store = Store.shared
+        let pl = store.tracks.isEmpty ? samplePlaylistJSON() : store.getPlaylistJSONString()
+        let js = base +
+            "\nwindow.__PLAYLIST__ = \(pl);" +
+            "\nwindow.__ACCOUNT__ = \(accountJSON());" +
+            "\nwindow.__FAVS__ = \(favsJSON());" +
+            "\nwindow.__favIdxs = \(favIdxsJSON());" +
+            "\nwindow.__STAT__ = \(statJSON());\n"
+        return js
     }
+
+    private func samplePlaylistJSON() -> String {
+        let arr = sampleTracks().map { t in
+            ["name": t.title, "title": t.title, "album": t.album,
+             "ext": t.ext, "size": t.size, "uri": t.url, "lrc": ""] as [String: Any]
+        }
+        return jsonString(["origin": "", "generatedAt": "", "tracks": arr])
+    }
+
+    private func accountJSON() -> String {
+        let cr = Creds.load()
+        let saved = !cr.origin.isEmpty && !cr.user.isEmpty
+        return jsonString(["saved": saved, "origin": cr.origin, "user": cr.user])
+    }
+    private func favsJSON() -> String { jsonString(["idxs": Store.shared.getFavs()]) }
+    private func favIdxsJSON() -> String { jsonString(Store.shared.getFavs()) }
+    private func statJSON() -> String {
+        let store = Store.shared
+        return jsonString([
+            "count": store.tracks.count,
+            "albums": store.albums.count,
+            "hoursLeft": store.hoursLeft(),
+            "totalBytes": store.totalBytes(),
+        ])
+    }
+
+    private func jsonString(_ obj: Any) -> String {
+        if let data = try? JSONSerialization.data(withJSONObject: obj),
+           let s = String(data: data, encoding: .utf8) { return s }
+        return "{}"
+    }
+    /// String -> JS 字符串字面量（带双引号）
+    private func jsStr(_ s: String) -> String { jsonString(s) }
 
     // MARK: - WKScriptMessageHandler
 
@@ -105,13 +150,105 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
                 engine.setQueue(indices: arr, startPos: start)
             }
         case "requestMeta":
-            if let idx = args.first as? Int {
-                webView.evaluateJavaScript("window.onMeta && window.onMeta(\(idx), {})", completionHandler: nil)
+            if let idx = args.first as? Int { requestMeta(idx: idx) }
+        case "login":
+            if let o = args[0] as? String, let u = args[1] as? String,
+               let p = args[2] as? String, let r = args[3] as? String {
+                let cr = Creds(origin: o, user: u, pass: p, root: r)
+                cr.save()
+                runSync()
             }
-        case "login", "syncNow", "logout", "syncFrom":
-            let js = "window.onSyncResult && window.onSyncResult({\"ok\":false,\"msg\":\"iOS 测试版暂不支持 NAS 登录同步\"})"
-            webView.evaluateJavaScript(js, completionHandler: nil)
+        case "syncNow":
+            runSync()
+        case "logout":
+            doLogout()
+        case "toggleFavorite":
+            if let idx = args[0] as? Int, let on = args[1] as? Bool {
+                Store.shared.setFav(idx, on)
+            } else if let idx = args[0] as? Int {
+                Store.shared.toggleFav(idx)
+            }
+        case "toast":
+            break
         default: break
+        }
+    }
+
+    // MARK: - 同步
+
+    private func runSync() {
+        let cr = Creds.load()
+        guard cr.valid() else {
+            eval("window.onSyncResult && window.onSyncResult({\"ok\":false,\"msg\":\"请先在设置中填写 NAS 账号\"})")
+            return
+        }
+        eval("window.onSyncProgress && window.onSyncProgress(\"准备同步…\")")
+        Task {
+            let res = await SyncManager.sync(creds: cr) { msg in
+                DispatchQueue.main.async {
+                    self.eval("window.onSyncProgress && window.onSyncProgress(\(self.jsStr(msg)))")
+                }
+            }
+            await MainActor.run {
+                if res.ok {
+                    self.loadTracksFromStore()
+                    self.engine.tracks = self.tracks
+                    self.injectState()
+                    self.eval("window.onSyncResult && window.onSyncResult({\"ok\":true,\"msg\":\(self.jsStr(res.msg)),\"count\":\(res.count)})")
+                } else {
+                    self.eval("window.onSyncResult && window.onSyncResult({\"ok\":false,\"msg\":\(self.jsStr(res.msg))})")
+                }
+            }
+        }
+    }
+
+    private func doLogout() {
+        Creds.clear()
+        Store.shared.clearPlaylist()
+        loadTracksFromStore()
+        engine.tracks = tracks
+        injectState()
+        eval("window.onSyncResult && window.onSyncResult({\"ok\":false,\"msg\":\"已退出登录\"})")
+    }
+
+    /// 同步/登出后热更新全局变量，player.html 的 boot()/loadAcc() 会读取
+    private func injectState() {
+        let js = "window.__PLAYLIST__ = \(Store.shared.getPlaylistJSONString());" +
+                 "window.__ACCOUNT__ = \(accountJSON());" +
+                 "window.__FAVS__ = \(favsJSON());" +
+                 "window.__favIdxs = \(favIdxsJSON());" +
+                 "window.__STAT__ = \(statJSON());"
+        eval(js)
+    }
+
+    private func eval(_ js: String) {
+        DispatchQueue.main.async {
+            self.webView.evaluateJavaScript(js, completionHandler: nil)
+        }
+    }
+
+    // MARK: - 在线元数据
+
+    private func requestMeta(idx: Int) {
+        guard idx >= 0, idx < tracks.count else { return }
+        let t = tracks[idx]
+        let title = t.title
+        let artist = t.album
+        eval("window.onMetaLoading && window.onMetaLoading(\(idx))")
+        Task {
+            let meta = await OnlineMeta.fetch(title: title, artist: artist)
+            await MainActor.run {
+                if let meta = meta {
+                    let d: [String: Any] = [
+                        "artist": meta.artist, "title": meta.title,
+                        "cover": meta.cover ?? "", "lyrics": meta.lyrics ?? "",
+                        "timed": meta.timed ?? [],
+                    ]
+                    self.eval("window.onMeta && window.onMeta(\(idx), \(self.jsonString(d)))")
+                } else {
+                    self.eval("window.onMeta && window.onMeta(\(idx), {})")
+                }
+            }
         }
     }
 
@@ -138,8 +275,7 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
             d["dur"] = self.engine.durationMs
             d["pos"] = self.engine.positionMs
             d["err"] = self.engine.errorMsg
-            guard let data = try? JSONSerialization.data(withJSONObject: d),
-                  let json = String(data: data, encoding: .utf8) else { return }
+            let json = self.jsonString(d)
             self.webView.evaluateJavaScript(
                 "window.onNativeState && window.onNativeState(\(json))", completionHandler: nil)
         }
