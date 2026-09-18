@@ -29,6 +29,19 @@ enum FnErr: Error, LocalizedError {
     }
 }
 
+private class TrustAllDelegate: NSObject, URLSessionDelegate {
+    func urlSession(_ session: URLSession,
+                    didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+           let trust = challenge.protectionSpace.serverTrust {
+            completionHandler(.useCredential, URLCredential(trust: trust))
+        } else {
+            completionHandler(.performDefaultHandling, nil)
+        }
+    }
+}
+
 final class FnosClient {
 
     static func errName(_ e: Int) -> String {
@@ -73,6 +86,8 @@ final class FnosClient {
     private var seq = 0
     private var pending: [String: Pending] = [:]
     private var recvTask: Task<Void, Never>?
+    private var session: URLSession?
+    private let trustDelegate = TrustAllDelegate()
 
     private struct Pending {
         var stream: Bool
@@ -113,7 +128,9 @@ final class FnosClient {
         req.setValue(origin, forHTTPHeaderField: "Origin")
         req.setValue("zh-CN,zh;q=0.9", forHTTPHeaderField: "Accept-Language")
         req.setValue(cookie, forHTTPHeaderField: "Cookie")
-        let ws = URLSession.shared.webSocketTask(with: req)
+        let s = URLSession(configuration: .default, delegate: trustDelegate, delegateQueue: nil)
+        session = s
+        let ws = s.webSocketTask(with: req)
         self.ws = ws
         ws.resume()
         recvTask = Task { await runReceiver(ws) }
@@ -122,6 +139,8 @@ final class FnosClient {
     func close() {
         ws?.cancel(with: .normalClosure, reason: nil)
         ws = nil
+        session?.invalidateAndCancel()
+        session = nil
         recvTask?.cancel()
         recvTask = nil
         failAll("closed")
@@ -165,7 +184,8 @@ final class FnosClient {
                 }
             } else {
                 let fin = obj["result"] != nil || obj["errno"] != nil ||
-                          obj["pub"] != nil || obj["download"] != nil || obj["secret"] != nil
+                          obj["pub"] != nil || obj["download"] != nil ||
+                          obj["secret"] != nil || obj["si"] != nil
                 if fin { self.pending[reqid] = p; final = obj }
             }
         }
@@ -274,10 +294,15 @@ final class FnosClient {
         guard let sec = r["secret"] as? String, !sec.isEmpty else {
             throw FnErr.proto("登录响应缺少 secret")
         }
-        hmacKey = try decryptSecret(sec)
-        token = r["token"] as? String ?? ""
-        longToken = r["longToken"] as? String ?? ""
-        if token.isEmpty { throw FnErr.proto("登录响应缺少 token") }
+        let key = try decryptSecret(sec)
+        let tok = r["token"] as? String ?? ""
+        let ltok = r["longToken"] as? String ?? ""
+        if tok.isEmpty { throw FnErr.proto("登录响应缺少 token") }
+        q.sync {
+            hmacKey = key
+            token = tok
+            longToken = ltok
+        }
     }
 
     func authToken(_ tk: String) async throws {
@@ -287,7 +312,7 @@ final class FnosClient {
         if let e = r["errno"] as? Int, e != 0 {
             throw FnErr.proto("文件通道认证失败：" + FnosClient.errName(e))
         }
-        if let u = r["uid"] as? Int { uid = u }
+        if let u = r["uid"] as? Int { q.sync { uid = u } }
     }
 
     // ---------- 文件 API ----------

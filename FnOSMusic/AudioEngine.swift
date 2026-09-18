@@ -31,6 +31,7 @@ final class AudioEngine: NSObject {
     private var timeObserverToken: Any?
     private var endObserver: NSObjectProtocol?
     private var kvoItem: AVPlayerItem?
+    private var timeObserved = false
 
     var tracks: [Track] = []
     private var queue: [Track] = []
@@ -55,6 +56,7 @@ final class AudioEngine: NSObject {
         if let t = timeObserverToken { player?.removeTimeObserver(t) }
         if let o = endObserver { NotificationCenter.default.removeObserver(o) }
         removeKVO()
+        if timeObserved { player?.removeObserver(self, forKeyPath: "timeControlStatus") }
     }
 
     // MARK: - 队列
@@ -188,6 +190,7 @@ final class AudioEngine: NSObject {
         if let old = kvoItem { old.removeObserver(self, forKeyPath: "status") }
         player?.removeObserver(self, forKeyPath: "timeControlStatus")
         player?.addObserver(self, forKeyPath: "timeControlStatus", options: [.new], context: nil)
+        timeObserved = true
         if let item = playerItem {
             item.addObserver(self, forKeyPath: "status", options: [.new], context: nil)
             kvoItem = item

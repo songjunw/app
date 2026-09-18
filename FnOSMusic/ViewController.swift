@@ -46,11 +46,13 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
 
     private func loadTracksFromStore() {
         let store = Store.shared
+        let origin = store.origin
         if !store.tracks.isEmpty {
             tracks = store.tracks.map { st in
-                let full = store.origin + st.uri
+                let full = st.uri.hasPrefix("http") ? st.uri : (origin + st.uri)
+                let lrc = st.lrc.isEmpty ? "" : (st.lrc.hasPrefix("http") ? st.lrc : (origin + st.lrc))
                 return Track(idx: st.idx, title: st.title.isEmpty ? st.name : st.title,
-                             album: st.album, url: full, ext: st.ext, size: Int(st.size), lrc: st.lrc)
+                             album: st.album, url: full, ext: st.ext, size: Int(st.size), lrc: lrc)
             }
         } else {
             tracks = sampleTracks()
