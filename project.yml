@@ -1,0 +1,13 @@
+name: FnOSMusic
+options:
+  bundleIdPrefix: com.fnos.music
+  deploymentTarget:
+    iOS: "15.0"
+targets:
+  FnOSMusic:
+    type: application
+    platform: iOS
+    sources:
+      - path: FnOSMusic
+    info:
+      path: FnOSMusic/Info.plist
