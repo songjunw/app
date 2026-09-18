@@ -38,7 +38,7 @@ struct Creds {
 
     private static func query(key: String) -> [CFString: Any] {
         [kSecClass: kSecClassGenericPassword,
-         kSecAttrService: service,
+         kSecAttrService: Creds.service,
          kSecAttrAccount: key]
     }
 
@@ -54,11 +54,11 @@ struct Creds {
     }
 
     private func write(key: String, value: String) {
-        SecItemDelete(query(key: key) as CFDictionary)
+        SecItemDelete(Creds.query(key: key) as CFDictionary)
         guard !value.isEmpty else { return }
         let q: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
-            kSecAttrService: service,
+            kSecAttrService: Creds.service,
             kSecAttrAccount: key,
             kSecValueData: Data(value.utf8),
             kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlock,
