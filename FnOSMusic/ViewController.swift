@@ -89,7 +89,8 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
             "\nwindow.__ACCOUNT__ = \(accountJSON());" +
             "\nwindow.__FAVS__ = \(favsJSON());" +
             "\nwindow.__favIdxs = \(favIdxsJSON());" +
-            "\nwindow.__STAT__ = \(statJSON());\n"
+            "\nwindow.__STAT__ = \(statJSON());" +
+            "\nwindow.__SYNCTRACE__ = \(traceJSON());\n"
         return js
     }
 
@@ -116,6 +117,11 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
             "hoursLeft": store.hoursLeft(),
             "totalBytes": store.totalBytes(),
         ])
+    }
+
+    /// 上次同步的落盘日志 + 是否异常中断（崩溃后重开可看到停在第几步）
+    private func traceJSON() -> String {
+        return jsonString(["crashed": SyncLog.crashed, "trace": SyncLog.trace])
     }
 
     private func jsonString(_ obj: Any) -> String {
@@ -224,7 +230,8 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
                  "window.__ACCOUNT__ = \(accountJSON());" +
                  "window.__FAVS__ = \(favsJSON());" +
                  "window.__favIdxs = \(favIdxsJSON());" +
-                 "window.__STAT__ = \(statJSON());"
+                 "window.__STAT__ = \(statJSON());" +
+                 "window.__SYNCTRACE__ = \(traceJSON());"
         eval(js)
     }
 

@@ -11,6 +11,13 @@ enum SyncManager {
         var expireAt: TimeInterval = 0
     }
 
+    /// 带本地化描述的同步错误，最终会原样展示给用户
+    private struct SyncErr: LocalizedError {
+        var msg: String
+        init(_ m: String) { msg = m }
+        var errorDescription: String? { msg }
+    }
+
     private static let audioExts = Set(["mp3", "flac", "wav", "m4a", "aac", "ogg", "ape", "wma", "opus", "alac"])
     private static let batch = 40
     private static let maxDirs = 4000
@@ -26,53 +33,81 @@ enum SyncManager {
         var lrc = ""
     }
 
+    /// 统一打点：既落盘（崩溃后可追溯），也推给 UI（用户实时可见）
+    private static func tick(_ msg: String, _ onProgress: @escaping (String) -> Void) {
+        SyncLog.step(msg)
+        onProgress(msg)
+    }
+
     static func sync(creds: Creds, onProgress: @escaping (String) -> Void) async -> Result {
-        guard creds.valid() else {
-            return Result(ok: false, count: 0, msg: "账号信息不完整")
-        }
         var res = Result(ok: false, count: 0, msg: "")
         var main: FnosClient? = nil
         var fc: FnosClient? = nil
-        do {
-            let origin = normOrigin(creds.origin)
-            onProgress("正在连接 \(hostOf(origin)) …")
-            main = FnosClient(origin: origin)
-            try await main!.connect(type: "main")
-            try await main!.fetchPub()
-            onProgress("正在登录 …")
-            try await main!.login(user: creds.user, password: creds.pass, deviceName: "iOS-Player")
+        SyncLog.begin()
+        defer {
+            main?.close()
+            fc?.close()
+        }
 
-            let token = main!.getToken()
+        do {
+            guard creds.valid() else {
+                throw SyncErr("账号信息不完整（地址 / 账号 / 密码 / 音乐目录 都要填）")
+            }
+
+            let origin = normOrigin(creds.origin)
+            guard !origin.isEmpty else { throw SyncErr("飞牛地址为空") }
+            guard let url = URL(string: origin), url.host != nil else {
+                throw SyncErr("飞牛地址格式不对：\(creds.origin)")
+            }
+            tick("① 正在连接 \(hostOf(origin)) …", onProgress)
+
+            let m = FnosClient(origin: origin)
+            main = m
+            try await m.connect(type: "main")
+            tick("② 已连接，正在获取密钥 …", onProgress)
+            try await m.fetchPub()
+            tick("③ 正在登录 \(creds.user) …", onProgress)
+            try await m.login(user: creds.user, password: creds.pass, deviceName: "iOS-Player")
+
+            let token = m.getToken()
+            guard !token.isEmpty else { throw SyncErr("登录成功，但没有拿到 token") }
+            tick("④ 登录成功，正在建立文件通道 …", onProgress)
+
             let cookie = "language=zh-CN; mode=relay; fnos-token=\(token)"
-            onProgress("正在建立文件通道 …")
-            fc = FnosClient(origin: origin, cookie: cookie)
-            fc!.setHmacKey(main!.getHmacKey())
-            try await fc!.connect(type: "file")
-            try await fc!.fetchSI()
-            try await fc!.authToken(token)
+            let f = FnosClient(origin: origin, cookie: cookie)
+            fc = f
+            f.setHmacKey(m.getHmacKey())
+            try await f.connect(type: "file")
+            try await f.fetchSI()
+            try await f.authToken(token)
+            tick("⑤ 通道就绪，开始扫描目录 …", onProgress)
 
             let root = normPath(creds.root)
-            onProgress("正在扫描 \(root) …")
+            guard !root.isEmpty else { throw SyncErr("音乐目录为空，请填形如 vol1/1000/音乐") }
 
             var list: [Entry] = []
             var lrcByKey: [String: String] = [:]
             var lrcByPath: [String: Entry] = [:]
             var dirs = 0
             var stack: [String] = [root]
+            var lastTick = Date()
+
             while !stack.isEmpty {
                 let dir = stack.removeLast()
-                if dirs + 1 > maxDirs { break }
+                if dirs >= maxDirs { break }
                 dirs += 1
                 let items: [[String: Any]]
                 do {
-                    items = try await fc!.ls(dir)
+                    items = try await f.ls(dir)
                 } catch {
                     if dirs == 1 {
-                        throw NSError(domain: "sync", code: -1,
-                            userInfo: [NSLocalizedDescriptionKey: "无法打开目录 \(dir)。\(await suggest(fc: fc!, bad: dir))"])
+                        let hint = await suggest(fc: f, bad: dir)
+                        throw SyncErr("打不开目录 \(dir)。\(hint)")
                     }
                     continue
                 }
+                // 专辑名 = 目录相对根目录的路径。每个目录算一次即可。
+                let album = albumOf(dir, root)
                 for it in items {
                     guard let name = it["name"] as? String, !name.isEmpty else { continue }
                     if (it["dir"] as? Int) == 1 {
@@ -83,8 +118,6 @@ enum SyncManager {
                     let ext = String(name[name.index(after: dot)...]).lowercased()
                     if ext == "lrc" {
                         let base = String(name[..<dot])
-                        let album = dir.count > root.count
-                            ? String(dir[dir.index(root.endIndex, offsetBy: 1)...]) : ""
                         lrcByKey[lrcKey(album: album, base: base)] = dir + "/" + name
                         let nb = normBase(base)
                         if nb != base { lrcByKey[lrcKey(album: album, base: nb)] = dir + "/" + name }
@@ -96,34 +129,33 @@ enum SyncManager {
                     e.name = name
                     e.ext = ext
                     e.size = (it["size"] as? NSNumber)?.int64Value ?? 0
-                    e.album = dir.count > root.count
-                        ? String(dir[dir.index(root.endIndex, offsetBy: 1)...]) : ""
+                    e.album = album
                     list.append(e)
                 }
-                if dirs % 5 == 0 || list.count % 200 == 0 {
-                    onProgress("已扫描 \(dirs) 个目录，找到 \(list.count) 首 …")
+                if Date().timeIntervalSince(lastTick) > 0.35 {
+                    lastTick = Date()
+                    tick("⑥ 已扫描 \(dirs) 个目录，找到 \(list.count) 首 …", onProgress)
                 }
             }
+            tick("⑥ 扫描结束：\(dirs) 个目录，\(list.count) 首音频", onProgress)
 
             // 把扫描到的 .lrc 关联到对应音频
             for e in list {
                 guard let dot = e.name.lastIndex(of: ".") else { continue }
                 let base = String(e.name[..<dot])
-                var lrcPath = lrcByKey[lrcKey(album: e.album, base: base)]
-                if lrcPath == nil {
+                var lp = lrcByKey[lrcKey(album: e.album, base: base)]
+                if lp == nil {
                     let nb = normBase(base)
-                    if nb != base { lrcPath = lrcByKey[lrcKey(album: e.album, base: nb)] }
+                    if nb != base { lp = lrcByKey[lrcKey(album: e.album, base: nb)] }
                 }
-                if let lp = lrcPath {
+                if let lp = lp {
                     e.lrcPath = lp
                     lrcByPath[lp] = e
                 }
             }
-            if list.isEmpty {
-                throw NSError(domain: "sync", code: -1,
-                    userInfo: [NSLocalizedDescriptionKey: "目录 \(root) 下没有找到音频文件，请检查路径"])
+            guard !list.isEmpty else {
+                throw SyncErr("目录 \(root) 下没找到音频文件，请检查路径")
             }
-            onProgress("共 \(list.count) 首，正在获取播放链接 …")
 
             // 中文友好排序：先目录后文件名
             list.sort {
@@ -137,7 +169,7 @@ enum SyncManager {
             for i in stride(from: 0, to: list.count, by: batch) {
                 let end = min(i + batch, list.count)
                 let paths = (i..<end).map { list[$0].path }
-                let uris = try await fc!.download(paths)
+                let uris = try await f.download(paths)
                 for k in 0..<(end - i) {
                     if k < uris.count,
                        let u = uris[k]["uri"] as? String, !u.isEmpty {
@@ -145,13 +177,10 @@ enum SyncManager {
                         got += 1
                     }
                 }
-                if (i / batch) % 3 == 0 {
-                    onProgress("获取链接 \(end)/\(list.count) …")
-                }
+                tick("⑦ 获取播放链接 \(end)/\(list.count) …", onProgress)
             }
-            if got == 0 {
-                throw NSError(domain: "sync", code: -1,
-                    userInfo: [NSLocalizedDescriptionKey: "未能获取任何播放链接"])
+            guard got > 0 else {
+                throw SyncErr("一首都没取到播放链接（可能是权限不足或签名失败）")
             }
 
             // 批量取同名 .lrc 歌词直链
@@ -161,7 +190,7 @@ enum SyncManager {
                 for i in stride(from: 0, to: lrcPaths.count, by: batch) {
                     let end = min(i + batch, lrcPaths.count)
                     let slice = Array(lrcPaths[i..<end])
-                    let uris = try await fc!.download(slice)
+                    let uris = try await f.download(slice)
                     for k in 0..<slice.count {
                         if k < uris.count,
                            let u = uris[k]["uri"] as? String, !u.isEmpty,
@@ -171,7 +200,7 @@ enum SyncManager {
                         }
                     }
                 }
-                onProgress("已关联 \(lgot) 个歌词文件")
+                tick("⑧ 已关联 \(lgot) 个歌词文件", onProgress)
             }
 
             // 生成清单并写入
@@ -190,8 +219,7 @@ enum SyncManager {
                   let cfgData = try? JSONSerialization.data(withJSONObject: config),
                   let plStr = String(data: plData, encoding: .utf8),
                   let cfgStr = String(data: cfgData, encoding: .utf8) else {
-                throw NSError(domain: "sync", code: -1,
-                    userInfo: [NSLocalizedDescriptionKey: "生成清单失败"])
+                throw SyncErr("生成清单失败")
             }
             let n = try Store.shared.importPlaylist(plStr, configJson: cfgStr)
             creds.save()
@@ -203,16 +231,33 @@ enum SyncManager {
             if got < list.count {
                 res.msg += "（\(list.count - got) 首未取到链接）"
             }
+            tick("⑨ 完成：" + res.msg, onProgress)
         } catch {
             res.ok = false
             res.msg = error.localizedDescription
+            SyncLog.step("✗ 出错：" + res.msg)
         }
-        main?.close()
-        fc?.close()
+
+        SyncLog.finish(ok: res.ok)
         return res
     }
 
     // ---------- 路径/字符串工具（复刻安卓版） ----------
+
+    /// 取 dir 相对 root 的相对路径，作为专辑名。
+    ///
+    /// ⚠️ 这里原来的写法是 `String(dir[dir.index(root.endIndex, offsetBy: 1)...])`，
+    /// 把 **root 的 String.Index 拿去索引另一个字符串 dir**。跨字符串复用 Index 在
+    /// Swift 里是未定义行为：当路径含中文时（UTF-8 与 UTF-16 偏移不同）偏移会落在
+    /// 字符中间，直接 `Fatal error: String index is out of bounds` 闪退。
+    /// 这就是"点同步就闪退"的根因。改为按 count 做前缀裁剪，彻底避免。
+    private static func albumOf(_ dir: String, _ root: String) -> String {
+        if root.isEmpty { return dir }
+        guard dir.hasPrefix(root) else { return "" }
+        var s = String(dir.dropFirst(root.count))
+        if s.hasPrefix("/") { s = String(s.dropFirst()) }
+        return s
+    }
 
     /// 规范化飞牛地址。把 `https://5ddd.com/s3664849639` 换算成 `https://s3664849639.5ddd.com`；
     /// 局域网地址（带端口）原样返回。

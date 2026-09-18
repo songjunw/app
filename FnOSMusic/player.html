@@ -257,6 +257,14 @@ body.paused .eq i{animation-play-state:paused}
 #sheet .prog.err{color:#f87171;border-color:#5b2b2b}
 #sheet .prog.ok{color:#4ade80;border-color:#2b5b3a}
 
+/* ---------- 同步日志（崩溃后定位用） ---------- */
+.seclog{margin-top:10px;border:1px solid var(--line);border-radius:9px;background:var(--panel2);overflow:hidden}
+.seclog .loghd{font-size:11.5px;color:var(--txt3);padding:8px 10px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+.seclog .loghd span{color:var(--acc);cursor:pointer;padding:2px 6px}
+.seclog .loghd span:active{opacity:.6}
+.seclog pre{margin:0;padding:9px 10px;font-size:11px;line-height:1.65;color:var(--txt2);white-space:pre-wrap;word-break:break-all;max-height:190px;overflow-y:auto;
+  font-family:ui-monospace,Menlo,Consolas,monospace}
+
 #toast{
   position:fixed;left:50%;bottom:calc(var(--bar) + var(--sab) + 22px);transform:translateX(-50%) translateY(14px);
   background:#1c2230;border:1px solid var(--line);color:var(--txt);
@@ -376,6 +384,10 @@ body.paused .eq i{animation-play-state:paused}
       </div>
 
       <div class="prog" id="syncBar" style="display:none"></div>
+      <div class="seclog" id="syncLogBox" style="display:none">
+        <div class="loghd">上次同步日志（可定位问题）<span id="syncLogCopy">复制</span></div>
+        <pre id="syncLog"></pre>
+      </div>
     </div>
 
     <button class="btn ghost" id="btnClose">关闭</button>
@@ -749,6 +761,7 @@ function loadAcc(){
     $('aLast').textContent   = fmtAgo(ACC.lastSync);
   }
   if (ACC.running) { setBusy(true); showProg('同步进行中…'); }
+  renderSyncLog();
 }
 
 function showProg(msg, kind){
@@ -756,7 +769,31 @@ function showProg(msg, kind){
   p.style.display = 'block';
   p.className = 'prog' + (kind ? ' ' + kind : '');
   p.textContent = msg;
+  try { p.scrollIntoView({ block:'nearest' }); } catch(e){}
 }
+
+// 上次同步日志：崩溃（闪退）后重开能看到停在第几步
+function renderSyncLog(force){
+  var t = { crashed:false, trace:'' };
+  try { if (HAS_APP) t = JSON.parse(App.getSyncTrace()) || t; } catch(e){}
+  var box = $('syncLogBox');
+  if (!box) return;
+  if (force || t.crashed) {
+    $('syncLog').textContent = t.trace || '（暂无记录）';
+    box.style.display = 'block';
+  } else {
+    box.style.display = 'none';
+  }
+}
+
+$('syncLogCopy').addEventListener('click', function(){
+  var ta = document.createElement('textarea');
+  ta.value = $('syncLog').textContent || '';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); toast('日志已复制'); } catch(e){}
+  document.body.removeChild(ta);
+});
 
 function setBusy(b){
   syncing = b;
@@ -828,6 +865,7 @@ window.onSyncResult = function(r){
   } else {
     showProg('同步失败：' + (r && r.msg ? r.msg : '未知错误'), 'err');
     toast('同步失败');
+    renderSyncLog(true);
   }
 };
 
