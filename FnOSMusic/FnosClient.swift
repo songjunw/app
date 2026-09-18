@@ -184,32 +184,48 @@ final class FnosClient {
             SyncLog.step("Fnos.handle json parse fail")
             return
         }
-        guard let reqid = obj["reqid"] as? String else {
-            SyncLog.step("Fnos.handle no reqid")
+        // reqid 可能是字符串也可能是数字（不同固件不同），一律归一成字符串，
+        // 否则整条响应会被静默丢弃，请求只能干等到超时。
+        var reqid: String? = nil
+        if let s = obj["reqid"] as? String { reqid = s }
+        else if let n = obj["reqid"] as? Int { reqid = String(n) }
+        else if let n = obj["reqid"] as? NSNumber { reqid = n.stringValue }
+        guard let rid = reqid else {
+            SyncLog.step("Fnos.handle no reqid keys=\(obj.keys.sorted().joined(separator: ","))")
             return
         }
-        SyncLog.step("Fnos.handle reqid=\(reqid)")
+        let reqid2 = rid
+        SyncLog.step("Fnos.handle reqid=\(reqid2) keys=\(obj.keys.sorted().joined(separator: ","))")
         var final: [String: Any]? = nil
         q.sync {
-            guard var p = self.pending[reqid] else { return }
+            guard var p = self.pending[reqid2] else {
+                SyncLog.step("Fnos.handle reqid=\(reqid2) no pending")
+                return
+            }
             if p.stream {
                 if let files = obj["files"] as? [[String: Any]] { p.files.append(contentsOf: files) }
                 if obj["result"] != nil || obj["errno"] != nil {
                     var f = obj
                     f["__files"] = p.files
-                    self.pending[reqid] = p
+                    self.pending[reqid2] = p
                     final = f
                 } else {
-                    self.pending[reqid] = p
+                    self.pending[reqid2] = p
                 }
             } else {
                 let fin = obj["result"] != nil || obj["errno"] != nil ||
                           obj["pub"] != nil || obj["download"] != nil ||
                           obj["secret"] != nil || obj["si"] != nil
-                if fin { self.pending[reqid] = p; final = obj }
+                if fin {
+                    self.pending[reqid2] = p
+                    final = obj
+                    SyncLog.step("Fnos.handle reqid=\(reqid2) FINAL")
+                } else {
+                    SyncLog.step("Fnos.handle reqid=\(reqid2) not final")
+                }
             }
         }
-        if let final = final { finish(reqid, .success(final)) }
+        if let final = final { finish(reqid2, .success(final)) }
     }
 
     /// 取出并移除 pending，恢复 continuation（保证只恢复一次，线程安全）
