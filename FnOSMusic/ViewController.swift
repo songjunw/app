@@ -41,9 +41,10 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
         view.addSubview(webView)
         engine.delegate = self
 
-        if let url = Bundle.main.url(forResource: "player", withExtension: "html"),
-           let html = try? String(contentsOf: url, encoding: .utf8) {
-            webView.loadHTMLString(html, baseURL: Bundle.main.resourceURL)
+        if let url = Bundle.main.url(forResource: "player", withExtension: "html") {
+            // 必须用文件 URL 加载：loadHTMLString 会让 viewport-fit=cover 失效、
+            // env(safe-area-inset-*) 恒为 0，导致页面缩在中间上下留黑。
+            webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
         }
     }
 
@@ -105,7 +106,8 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
     private func accountJSON() -> String {
         let cr = Creds.load()
         let saved = !cr.origin.isEmpty && !cr.user.isEmpty
-        return jsonString(["saved": saved, "origin": cr.origin, "user": cr.user])
+        return jsonString(["saved": saved, "origin": cr.origin, "user": cr.user,
+                           "root": cr.root, "lastSync": lastSyncMs()])
     }
     private func favsJSON() -> String { jsonString(["idxs": Store.shared.getFavs()]) }
     private func favIdxsJSON() -> String { jsonString(Store.shared.getFavs()) }
@@ -119,18 +121,41 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
         ])
     }
 
+    /// 上次同步时间（毫秒时间戳，JS 的 fmtAgo 吃 ms）；解析失败返回 0 => 显示"从未"
+    private func lastSyncMs() -> Double {
+        let iso = Store.shared.syncedAt
+        guard !iso.isEmpty else { return 0 }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: iso) { return d.timeIntervalSince1970 * 1000 }
+        return 0
+    }
+
     /// 上次同步的落盘日志 + 是否异常中断（崩溃后重开可看到停在第几步）
     private func traceJSON() -> String {
         return jsonString(["crashed": SyncLog.crashed, "trace": SyncLog.trace])
     }
 
     private func jsonString(_ obj: Any) -> String {
-        if let data = try? JSONSerialization.data(withJSONObject: obj),
+        // ⚠️ JSONSerialization 要求顶层必须是 array/dictionary，否则抛的是
+        // NSException（try? 接不住，直接闪退），所以必须先校验再调用。
+        if let arr = obj as? [Any], let data = try? JSONSerialization.data(withJSONObject: arr),
+           let s = String(data: data, encoding: .utf8) { return s }
+        if let dic = obj as? [String: Any], let data = try? JSONSerialization.data(withJSONObject: dic),
            let s = String(data: data, encoding: .utf8) { return s }
         return "{}"
     }
-    /// String -> JS 字符串字面量（带双引号）
-    private func jsStr(_ s: String) -> String { jsonString(s) }
+    /// String -> JS 字符串字面量（带双引号）。
+    /// 绝不能用 JSONSerialization 直接编 String（顶层非容器会抛 NSException 且 try? 接不住），
+    /// 改走 JSONEncoder（纯 Swift 错误路径）编码单元素数组后剥壳，转义/Unicode 全部正确。
+    private func jsStr(_ s: String) -> String {
+        if let data = try? JSONEncoder().encode([s]),
+           let str = String(data: data, encoding: .utf8),
+           str.hasPrefix("[\""), str.hasSuffix("\"]"), str.count >= 3 {
+            return String(str.dropFirst().dropLast())
+        }
+        return "\"\""
+    }
 
     // MARK: - WKScriptMessageHandler
 
@@ -165,20 +190,22 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
         case "requestMeta":
             if let idx = args.first as? Int { requestMeta(idx: idx) }
         case "login":
-            if let o = args[0] as? String, let u = args[1] as? String,
-               let p = args[2] as? String, let r = args[3] as? String {
-                let cr = Creds(origin: o, user: u, pass: p, root: r)
-                cr.save()
-                runSync()
-            }
+            // args 下标先做边界检查，避免 JS 侧少传参数时数组越界闪退
+            guard args.count >= 4,
+                  let o = args[0] as? String, let u = args[1] as? String,
+                  let p = args[2] as? String, let r = args[3] as? String else { return }
+            let cr = Creds(origin: o, user: u, pass: p, root: r)
+            cr.save()
+            runSync()
         case "syncNow":
             runSync()
         case "logout":
             doLogout()
         case "toggleFavorite":
-            if let idx = args[0] as? Int, let on = args[1] as? Bool {
+            guard args.count >= 1, let idx = args[0] as? Int else { return }
+            if args.count >= 2, let on = args[1] as? Bool {
                 Store.shared.setFav(idx, on)
-            } else if let idx = args[0] as? Int {
+            } else {
                 Store.shared.toggleFav(idx)
             }
         case "toast":
