@@ -66,9 +66,11 @@ enum SyncManager {
             try await m.connect(type: "main")
             tick("② 已连接，正在获取密钥 …", onProgress)
             try await m.fetchPub()
+            SyncLog.step("SyncManager.fetchPub returned")
             tick("③ 正在登录 \(creds.user) …", onProgress)
             try await m.login(user: creds.user, password: creds.pass, deviceName: "iOS-Player")
 
+            SyncLog.step("SyncManager.login returned")
             let token = m.getToken()
             guard !token.isEmpty else { throw SyncErr("登录成功，但没有拿到 token") }
             tick("④ 登录成功，正在建立文件通道 …", onProgress)
