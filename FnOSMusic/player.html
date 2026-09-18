@@ -262,7 +262,9 @@ body.paused .eq i{animation-play-state:paused}
 .seclog .loghd{font-size:11.5px;color:var(--txt3);padding:8px 10px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
 .seclog .loghd span{color:var(--acc);cursor:pointer;padding:2px 6px}
 .seclog .loghd span:active{opacity:.6}
-.seclog pre{margin:0;padding:9px 10px;font-size:11px;line-height:1.65;color:var(--txt2);white-space:pre-wrap;word-break:break-all;max-height:190px;overflow-y:auto;
+.seclog .loghd .lgacts{display:flex;gap:4px}
+.seclog .loghd .lgacts span{border:1px solid var(--line);border-radius:6px;font-size:10.5px;padding:3px 8px}
+.seclog pre{margin:0;padding:9px 10px;font-size:11px;line-height:1.65;color:var(--txt2);white-space:pre-wrap;word-break:break-all;max-height:220px;overflow-y:auto;
   font-family:ui-monospace,Menlo,Consolas,monospace}
 
 #toast{
@@ -384,9 +386,15 @@ body.paused .eq i{animation-play-state:paused}
       </div>
 
       <div class="prog" id="syncBar" style="display:none"></div>
-      <div class="seclog" id="syncLogBox" style="display:none">
-        <div class="loghd">上次同步日志（可定位问题）<span id="syncLogCopy">复制</span></div>
-        <pre id="syncLog"></pre>
+      <div class="seclog" id="syncLogBox">
+        <div class="loghd">运行日志（测试期定位问题用）
+          <span class="lgacts">
+            <span id="syncLogRefresh">刷新</span>
+            <span id="syncLogCopy">复制</span>
+            <span id="syncLogClear">清空</span>
+          </span>
+        </div>
+        <pre id="syncLog">（暂无日志。点同步或播放后会实时记录到这里。）</pre>
       </div>
     </div>
 
@@ -772,19 +780,39 @@ function showProg(msg, kind){
   try { p.scrollIntoView({ block:'nearest' }); } catch(e){}
 }
 
-// 上次同步日志：崩溃（闪退）后重开能看到停在第几步
-function renderSyncLog(force){
+// ---------- 运行日志（测试期定位问题用，项目完成后再移除） ----------
+// 实时日志缓冲：原生 onNativeLog 每行追加到这里，也会合并进"同步日志"
+var __liveLog = [];
+
+function logLine(line){
+  __liveLog.push(line);
+  if (__liveLog.length > 500) __liveLog = __liveLog.slice(-500);
+  paintLog();
+}
+
+function paintLog(){
+  var el = $('syncLog');
+  if (!el) return;
   var t = { crashed:false, trace:'' };
   try { if (HAS_APP) t = JSON.parse(App.getSyncTrace()) || t; } catch(e){}
-  var box = $('syncLogBox');
-  if (!box) return;
-  if (force || t.crashed) {
-    $('syncLog').textContent = t.trace || '（暂无记录）';
-    box.style.display = 'block';
-  } else {
-    box.style.display = 'none';
-  }
+  var parts = [];
+  if (__liveLog.length) parts.push('【实时运行日志】\n' + __liveLog.join('\n'));
+  if (t.trace) parts.push('【同步落盘日志】\n' + t.trace);
+  el.textContent = parts.length ? parts.join('\n\n') : '（暂无日志）';
+  el.scrollTop = el.scrollHeight;
 }
+
+// 崩溃（闪退）后重开能看到停在第几步；现在也常驻显示
+function renderSyncLog(force){
+  paintLog();
+}
+
+// 原生实时日志入口
+window.onNativeLog = function(line){
+  logLine(line);
+};
+
+$('syncLogRefresh').addEventListener('click', function(){ paintLog(); toast('日志已刷新'); });
 
 $('syncLogCopy').addEventListener('click', function(){
   var ta = document.createElement('textarea');
@@ -793,6 +821,12 @@ $('syncLogCopy').addEventListener('click', function(){
   ta.select();
   try { document.execCommand('copy'); toast('日志已复制'); } catch(e){}
   document.body.removeChild(ta);
+});
+
+$('syncLogClear').addEventListener('click', function(){
+  __liveLog = [];
+  paintLog();
+  toast('实时日志已清空');
 });
 
 function setBusy(b){

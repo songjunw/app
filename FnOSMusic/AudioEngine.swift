@@ -16,6 +16,8 @@ struct Track {
 protocol AudioEngineDelegate: AnyObject {
     func engineStateChanged()
     func engineProgress(posMs: Int, durMs: Int, bufPct: Int)
+    /// 测试期运行日志（播放 URL / status / 错误 / 音频会话），推给 UI 实时展示
+    func engineLog(_ line: String)
 }
 
 /// 原生播放引擎：
@@ -25,6 +27,12 @@ protocol AudioEngineDelegate: AnyObject {
 final class AudioEngine: NSObject {
 
     weak var delegate: AudioEngineDelegate?
+
+    /// 测试期运行日志：落盘 SyncLog + 实时推给 UI
+    private func log(_ line: String) {
+        SyncLog.step(line)
+        delegate?.engineLog(line)
+    }
 
     private var player: AVPlayer?
     private var playerItem: AVPlayerItem?
@@ -132,9 +140,18 @@ final class AudioEngine: NSObject {
         removeKVO()
 
         let playURL = resolveURL(t.url)
-        SyncLog.step("AudioEngine.openCurrent idx=\(t.idx) title=\(t.title)")
-        SyncLog.step("AudioEngine.openCurrent url=\(playURL.absoluteString)")
-        let asset = AVURLAsset(url: playURL)
+        log("▶ 播放 #\(t.idx) \(t.title)")
+        log("  url=\(playURL.absoluteString)")
+        probeURL(playURL)   // 用 URLSession 探测直链可达性/状态码（区分 URL 错 vs 鉴权/格式）
+
+        // 给播放请求带 Cookie（fnos-token）与移动端 UA。若 fnOS 直链需要会话鉴权，
+        // AVPlayer 默认不带 Cookie 就会 401/403 → 无声。这里显式注入。
+        var hdrs: [String: String] = [
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+        ]
+        let ck = Store.shared.cookie
+        if !ck.isEmpty { hdrs["Cookie"] = ck }
+        let asset = AVURLAsset(url: playURL, options: ["AVURLAssetHTTPHeaderFieldsKey": hdrs])
         let item = AVPlayerItem(asset: asset)
         playerItem = item
         player?.replaceCurrentItem(with: item)
@@ -160,8 +177,38 @@ final class AudioEngine: NSObject {
            let u = URL(string: enc), u.scheme != nil, u.host != nil {
             return u
         }
-        SyncLog.step("AudioEngine.resolveURL FAIL: \(raw)")
+        log("  ✗ URL 解析失败: \(raw)")
         return URL(fileURLWithPath: "")
+    }
+
+    /// 用独立的 URLSession 探测直链：记录 HTTP 状态码 + Content-Type + 是否支持 Range。
+    /// 用于区分「URL 不可达/404」vs「URL 可达但 AVPlayer 播不出（鉴权/格式/Range 缺失）」。
+    /// 不带 Cookie（与 AVPlayer 一致），这样能暴露"直链需要 Cookie 鉴权"的问题。
+    private func probeURL(_ url: URL) {
+        var req = URLRequest(url: url)
+        req.httpMethod = "HEAD"
+        req.timeoutInterval = 12
+        req.setValue("bytes=0-0", forHTTPHeaderField: "Range")   // 探测服务器是否支持 Range（AVPlayer 强依赖）
+        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
+        let task = URLSession.shared.dataTask(with: req) { [weak self] data, resp, err in
+            if let e = err {
+                self?.log("  ✗ 探测直链失败: \(e.localizedDescription)")
+                return
+            }
+            if let h = resp as? HTTPURLResponse {
+                let ct = h.value(forHTTPHeaderField: "Content-Type") ?? "?"
+                let cr = h.value(forHTTPHeaderField: "Content-Range") ?? "?"
+                let len = h.value(forHTTPHeaderField: "Content-Length") ?? "?"
+                self?.log("  探测直链 HTTP \(h.statusCode) type=\(ct) range=\(cr) len=\(len)")
+                if h.statusCode == 401 || h.statusCode == 403 {
+                    self?.log("  ⚠️ 直链需要鉴权(401/403)——AVPlayer 不带 Cookie，这极可能是无声根因")
+                }
+                if h.statusCode != 200 && h.statusCode != 206 {
+                    self?.log("  ⚠️ 直链返回非 200/206，AVPlayer 无法播放")
+                }
+            }
+        }
+        task.resume()
     }
 
     func play() {
@@ -250,10 +297,13 @@ final class AudioEngine: NSObject {
             switch st {
             case .playing:
                 isPlaying = true; isLoading = false
+                log("  ▶ 进入播放状态 playing")
             case .waitingToPlayAtSpecifiedRate:
                 isLoading = true; isPlaying = false
+                log("  ⏳ 缓冲中 waitingToPlayAtSpecifiedRate")
             default:
                 isPlaying = false; isLoading = false
+                log("  ⏸ 播放暂停/停止 timeControlStatus=\(st.rawValue)")
             }
             updateNowPlayingPlaybackState()
             notifyState()
@@ -261,13 +311,13 @@ final class AudioEngine: NSObject {
             if let item = playerItem, item.status == .failed {
                 errorMsg = item.error?.localizedDescription ?? "播放失败"
                 let code = (item.error as NSError?)?.code ?? 0
-                SyncLog.step("AudioEngine.item FAILED code=\(code) err=\(errorMsg)")
+                log("  ✗ AVPlayerItem 失败 code=\(code): \(errorMsg)")
                 notifyState()
             } else if let item = playerItem, item.status == .readyToPlay {
                 isLoading = false
-                SyncLog.step("AudioEngine.item readyToPlay")
+                log("  ✓ AVPlayerItem 就绪")
             } else if let item = playerItem, item.status == .unknown {
-                SyncLog.step("AudioEngine.item status=unknown")
+                log("  … AVPlayerItem 状态未知（仍在加载）")
             }
         }
     }

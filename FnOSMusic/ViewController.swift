@@ -318,6 +318,15 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
         }
     }
 
+    /// 播放引擎的运行日志 → 实时推给 JS 的 onNativeLog（测试期可见，项目完成后再移除）
+    func engineLog(_ line: String) {
+        DispatchQueue.main.async {
+            self.webView.evaluateJavaScript(
+                "window.onNativeLog && window.onNativeLog(\(self.jsStr(line)))",
+                completionHandler: nil)
+        }
+    }
+
     private func pushState() {
         DispatchQueue.main.async {
             var d: [String: Any] = [:]
