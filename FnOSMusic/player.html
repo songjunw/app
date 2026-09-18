@@ -17,7 +17,7 @@
   --sar:env(safe-area-inset-right,0px);
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-html,body{height:100%;overflow:hidden}
+html,body{height:100%;min-height:100dvh;overflow:hidden}
 body{
   background:var(--bg);color:var(--txt);
   font:15px/1.5 -apple-system,"Roboto","Noto Sans CJK SC","Microsoft YaHei",sans-serif;
@@ -28,7 +28,7 @@ body{
 /* ---------- 顶栏 ---------- */
 header{
   flex:none;background:var(--panel);border-bottom:1px solid var(--line);
-  padding:10px 14px 8px;
+  padding:calc(10px + var(--sat)) 14px 8px;
 }
 .hrow{display:flex;align-items:center;gap:10px}
 .disc{
@@ -103,8 +103,8 @@ body.paused .eq i{animation-play-state:paused}
 
 /* ---------- 迷你播放条 ---------- */
 #mini{
-  flex:none;height:var(--bar);background:var(--panel);border-top:1px solid var(--line);
-  display:flex;align-items:center;gap:11px;padding:0 12px;position:relative;
+  flex:none;height:calc(var(--bar) + var(--sab));background:var(--panel);border-top:1px solid var(--line);
+  display:flex;align-items:center;gap:11px;padding:0 12px calc(var(--sab));position:relative;
 }
 #mini .mprog{position:absolute;top:0;left:0;height:2px;background:linear-gradient(90deg,var(--acc),var(--acc2));width:0}
 .cover{

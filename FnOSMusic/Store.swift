@@ -137,7 +137,16 @@ final class Store {
             writeFile("config.json", cfg)
         }
         writeFile("playlist.json", playlistJson)
-        queue.sync { parsePlaylist(playlistJson) }
+        queue.sync {
+            parsePlaylist(playlistJson)
+            // 同步更新时间：config.json 里的 syncedAt（ISO 串）
+            if let cg = configJson, !cg.isEmpty,
+               let cd = cg.data(using: .utf8),
+               let co = try? JSONSerialization.jsonObject(with: cd) as? [String: Any],
+               let st = co["syncedAt"] as? String {
+                _syncedAt = st
+            }
+        }
         return arr.count
     }
 
@@ -178,18 +187,27 @@ final class Store {
         }
     }
 
-    /// 给 player.html 的 App.getPlaylist() 用：返回 {origin, generatedAt, tracks:[...]}
+    /// 给 player.html 的 App.getPlaylist() 用。
+    /// 注意：player.html 的渲染/筛选/播放/收藏全用**短字段名** i/n/a/s/e/u/l，
+    /// 安卓版 Store 直接输出短名；iOS 这边之前误用了长名（name/title/album/...），
+    /// 导致列表全是空白、拿不到歌名/大小、点播放取不到 url。这里输出短名，
+    /// 同时保留长名字段做兼容，避免其它地方（如 JS 里读 title）失效。
     func getPlaylistJSONString() -> String {
         queue.sync {
             var arr: [[String: Any]] = []
             for t in _tracks {
                 arr.append([
+                    "i": t.idx, "n": t.title, "a": t.album,
+                    "s": t.size, "e": t.ext, "u": t.uri, "l": t.lrc,
+                    // 兼容长名
                     "name": t.name, "title": t.title, "album": t.album,
                     "ext": t.ext, "size": t.size, "uri": t.uri, "lrc": t.lrc,
                 ])
             }
             let root: [String: Any] = [
-                "origin": _origin, "generatedAt": _generatedAt, "tracks": arr,
+                "origin": _origin, "generatedAt": _generatedAt,
+                "albums": _albums, "expireAt": _expireAt,
+                "tracks": arr,
             ]
             if let data = try? JSONSerialization.data(withJSONObject: root),
                let s = String(data: data, encoding: .utf8) { return s }

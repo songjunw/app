@@ -389,7 +389,12 @@ final class FnosClient {
     func download(_ paths: [String]) async throws -> [[String: Any]] {
         let r = try await send(["req": "file.download", "files": paths])
         if let e = r["errno"] as? Int, e > 0 { throw FnErr.proto(FnosClient.errName(e)) }
-        return r["download"] as? [[String: Any]] ?? []
+        let arr = r["download"] as? [[String: Any]] ?? []
+        // 记录第一个 uri 样例，用于确认：是绝对 URL 还是相对路径、签名参数长什么样（有没有 t=）
+        if let first = arr.first, let u = first["uri"] as? String {
+            SyncLog.step("Fnos.download first uri: \(u.prefix(120))")
+        }
+        return arr
     }
 
     // ---------- 加密 ----------

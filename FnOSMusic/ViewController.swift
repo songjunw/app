@@ -48,6 +48,16 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
         }
     }
 
+    // 安全区变化（横竖屏、灵动岛展开/收起）时重设 WebView frame，确保始终铺满全屏
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        webView?.frame = view.bounds
+    }
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        webView?.frame = view.bounds
+    }
+
     // MARK: - 曲库
 
     private func loadTracksFromStore() {
@@ -125,8 +135,11 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
     private func lastSyncMs() -> Double {
         let iso = Store.shared.syncedAt
         guard !iso.isEmpty else { return 0 }
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        // 与 SyncManager.isoNow() 的输出格式严格一致（yyyy-MM-dd'T'HH:mm:ss.SSS'Z'，UTC）
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+        f.timeZone = TimeZone(identifier: "UTC")
         if let d = f.date(from: iso) { return d.timeIntervalSince1970 * 1000 }
         return 0
     }
