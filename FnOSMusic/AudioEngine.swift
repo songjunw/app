@@ -56,7 +56,6 @@ final class AudioEngine: NSObject {
         if let t = timeObserverToken { player?.removeTimeObserver(t) }
         if let o = endObserver { NotificationCenter.default.removeObserver(o) }
         removeKVO()
-        if timeObserved { player?.removeObserver(self, forKeyPath: "timeControlStatus") }
     }
 
     // MARK: - 队列
@@ -187,10 +186,12 @@ final class AudioEngine: NSObject {
     }
 
     private func setupKVO() {
-        if let old = kvoItem { old.removeObserver(self, forKeyPath: "status") }
-        player?.removeObserver(self, forKeyPath: "timeControlStatus")
-        player?.addObserver(self, forKeyPath: "timeControlStatus", options: [.new], context: nil)
-        timeObserved = true
+        // 先干净地移除旧的，再按需注册新的，避免重复 add 或未注册就 remove
+        removeKVO()
+        if !timeObserved {
+            player?.addObserver(self, forKeyPath: "timeControlStatus", options: [.new], context: nil)
+            timeObserved = true
+        }
         if let item = playerItem {
             item.addObserver(self, forKeyPath: "status", options: [.new], context: nil)
             kvoItem = item
@@ -198,8 +199,16 @@ final class AudioEngine: NSObject {
     }
 
     private func removeKVO() {
-        if let old = kvoItem { old.removeObserver(self, forKeyPath: "status") }
-        kvoItem = nil
+        // ⚠️ 未注册就 removeObserver 会抛 NSException（Swift 接不住，直接闪退），
+        // 所以必须用标志位/记录判断，绝不能无条件 remove。
+        if timeObserved {
+            player?.removeObserver(self, forKeyPath: "timeControlStatus")
+            timeObserved = false
+        }
+        if let old = kvoItem {
+            old.removeObserver(self, forKeyPath: "status")
+            kvoItem = nil
+        }
     }
 
     private func tick() {
