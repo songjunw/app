@@ -352,13 +352,14 @@ final class FnosClient {
     private func aesCBC(op: CCOperation, key: Data, iv: Data, data: Data) throws -> Data {
         var out = Data(count: data.count + kCCBlockSizeAES128)
         var outLen: size_t = 0
+        let outCount = out.count
         let status = out.withUnsafeMutableBytes { ob in
             data.withUnsafeBytes { db in
                 key.withUnsafeBytes { kb in
                     iv.withUnsafeBytes { ib in
                         CCCrypt(op, CCAlgorithm(kCCAlgorithmAES), CCOptions(kCCOptionPKCS7Padding),
                                 kb.baseAddress, key.count, ib.baseAddress,
-                                db.baseAddress, data.count, ob.baseAddress, out.count, &outLen)
+                                db.baseAddress, data.count, ob.baseAddress, outCount, &outLen)
                     }
                 }
             }
