@@ -130,53 +130,76 @@ body.paused .eq i{animation-play-state:paused}
   display:flex;flex-direction:column;
   padding:var(--sat) calc(26px + var(--sar)) calc(10px + var(--sab)) calc(26px + var(--sal));
   transform:translateY(100%);transition:transform .28s cubic-bezier(.3,.8,.4,1);
+  overflow:hidden;
 }
 #full.show{transform:translateY(0)}
-.artwrap{flex:1;display:flex;align-items:center;justify-content:center;min-height:0;padding:8px 0}
+/* 封面取色氛围光晕：柔和渐变色罩，随封面主色变化 */
+#fullAura{
+  position:absolute;inset:0;z-index:0;pointer-events:none;
+  background:radial-gradient(120% 70% at 50% 8%, rgba(109,140,255,.22), transparent 60%);
+  transition:background .5s ease;
+}
+#full .ftext,#full .artwrap,#full .seekwrap,#full .fctrl,#full .fbot{position:relative;z-index:1}
+.artwrap{flex:1;display:flex;align-items:center;justify-content:center;min-height:0;padding:8px 0;position:relative}
 .art{
   width:min(74vw,300px);aspect-ratio:1;border-radius:50%;position:relative;
-  background:conic-gradient(from 0deg,var(--acc),var(--acc2),var(--acc));
+  background:conic-gradient(from 0deg,#232a37,#1a2030,#232a37);
   animation:spin 14s linear infinite;animation-play-state:paused;
-  box-shadow:0 16px 50px rgba(109,140,255,.18);
+  box-shadow:
+    0 24px 70px rgba(0,0,0,.6),
+    0 8px 30px rgba(109,140,255,.14),
+    inset 0 0 0 1px rgba(255,255,255,.04);
+  transition:transform .2s ease;
 }
 .art.on{animation-play-state:running}
-.art::before{content:"";position:absolute;inset:11%;border-radius:50%;
-  background:repeating-radial-gradient(circle at center,#0f131b 0 3px,#141924 3px 6px)}
-.art::after{content:"";position:absolute;inset:43%;border-radius:50%;
-  background:linear-gradient(135deg,var(--acc),var(--acc2))}
+/* 外圈金属环 + 黑胶盘面纹理 */
+.art::before{content:"";position:absolute;inset:0;border-radius:50%;
+  background:repeating-radial-gradient(circle at center,#0d1017 0 2px,#11151e 2px 4px,#0d1017 4px 6px);
+  box-shadow:inset 0 0 40px rgba(0,0,0,.75);}
+.art::after{content:"";position:absolute;inset:42%;border-radius:50%;
+  background:
+    linear-gradient(135deg,var(--acc),var(--acc2));
+  box-shadow:0 0 24px rgba(109,140,255,.4), inset 0 0 0 2px rgba(255,255,255,.12);}
+/* 盘面高光扫光 */
+.art .sheen{position:absolute;inset:0;border-radius:50%;z-index:2;pointer-events:none;
+  background:conic-gradient(from 210deg,transparent 0deg,rgba(255,255,255,.06) 40deg,transparent 90deg);}
+/* 中心小圆点（唱片孔） */
+.art .hole{position:absolute;inset:46.5%;border-radius:50%;background:#0b0d12;z-index:3;
+  box-shadow:inset 0 0 3px rgba(0,0,0,.9), 0 0 0 1px rgba(255,255,255,.03);}
 
-.ftext{flex:none;text-align:center;padding:16px 0 8px}
-.ftext .ft{font-size:19px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ftext .fa{font-size:13px;color:var(--txt3);margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.metatip{font-size:11px;color:var(--acc2);margin-top:5px;min-height:0;opacity:0;transition:opacity .2s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ftext{flex:none;text-align:center;padding:14px 0 6px}
+.ftext .ft{font-size:21px;font-weight:700;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ftext .fa{font-size:13px;color:var(--txt3);margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.metatip{font-size:11px;color:var(--acc2);margin-top:6px;min-height:0;opacity:0;transition:opacity .2s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .metatip.on{opacity:1}
-.ftrow{display:flex;align-items:center;justify-content:center;gap:10px}
-.ftrow .favbtn{width:34px;height:34px;font-size:22px}
+.ftrow{display:flex;align-items:center;justify-content:center;gap:12px}
+.ftrow .favbtn{width:38px;height:38px;font-size:24px;background:var(--panel2);border:1px solid var(--line);border-radius:50%}
 
-.seekwrap{flex:none;padding:2px 0 4px}
-.track{height:26px;display:flex;align-items:center;position:relative}
-.track .rail{height:4px;width:100%;background:#1e2431;border-radius:3px;overflow:hidden;position:relative}
-.track .buf{position:absolute;left:0;top:0;bottom:0;background:#2a3243;width:0}
-.track .fill{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,var(--acc),var(--acc2));width:0}
-.track .knob{position:absolute;width:14px;height:14px;border-radius:50%;background:#fff;
-  box-shadow:0 2px 6px rgba(0,0,0,.5);left:0;transform:translateX(-50%);transition:transform .1s}
-.track.drag .knob{transform:translateX(-50%) scale(1.35)}
-.times{display:flex;justify-content:space-between;font-size:11.5px;color:var(--txt3);font-variant-numeric:tabular-nums;margin-top:-2px}
+.seekwrap{flex:none;padding:2px 0 6px}
+.track{height:32px;display:flex;align-items:center;position:relative}
+.track .rail{height:5px;width:100%;background:#1c2230;border-radius:4px;overflow:visible;position:relative}
+.track .buf{position:absolute;left:0;top:0;bottom:0;background:#2a3243;width:0;border-radius:4px}
+.track .fill{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,var(--acc),var(--acc2));width:0;border-radius:4px}
+.track .knob{position:absolute;width:16px;height:16px;border-radius:50%;background:#fff;
+  box-shadow:0 0 10px rgba(109,140,255,.6),0 2px 6px rgba(0,0,0,.5);left:0;transform:translateX(-50%);transition:transform .1s}
+.track.drag .knob{transform:translateX(-50%) scale(1.45)}
+.times{display:flex;justify-content:space-between;font-size:11.5px;color:var(--txt3);font-variant-numeric:tabular-nums;margin-top:2px}
 
-.fctrl{flex:none;display:flex;align-items:center;justify-content:space-between;padding:14px 0 8px}
+.fctrl{flex:none;display:flex;align-items:center;justify-content:space-between;padding:12px 2px 6px}
 .fbtn{
-  width:46px;height:46px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;
   color:var(--txt2);background:transparent;position:relative;
+  transition:transform .1s;
 }
-.fbtn:active{background:var(--panel2)}
+.fbtn:active{background:var(--panel2);transform:scale(.94)}
 .fbtn svg{width:22px;height:22px;fill:currentColor}
 .fbtn.big{
-  width:64px;height:64px;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;
-  box-shadow:0 8px 24px rgba(109,140,255,.32);
+  width:72px;height:72px;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;
+  box-shadow:0 10px 30px rgba(109,140,255,.38), 0 0 0 6px rgba(109,140,255,.08);
 }
-.fbtn.big svg{width:26px;height:26px}
+.fbtn.big svg{width:28px;height:28px}
 .fbtn.act{color:var(--acc)}
-.fbtn .badge{position:absolute;bottom:5px;font-size:9px;font-weight:700}
+.fbtn .badge{position:absolute;bottom:6px;font-size:9px;font-weight:700}
 
 .fbot{flex:none;display:flex;align-items:center;gap:12px;padding:6px 0 18px;color:var(--txt3);font-size:12px}
 .fbot .vol{flex:1;height:22px;display:flex;align-items:center;position:relative}
@@ -196,14 +219,16 @@ body.paused .eq i{animation-play-state:paused}
 #artimg{
   position:absolute;inset:0;border-radius:50%;
   background-size:cover;background-position:center;background-color:#1a2030;
-  opacity:0;transition:opacity .35s;z-index:1;
+  opacity:0;transition:opacity .4s;z-index:4;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);
 }
 .art.hascover #artimg{opacity:1}
-.art.hascover::before,.art.hascover::after{display:none}
+.art.hascover .sheen,.art.hascover .hole{opacity:0}
 
 #lyr{
   position:absolute;inset:0;z-index:6;
-  background:var(--bg);
+  background:rgba(11,13,18,.82);
+  -webkit-backdrop-filter:blur(18px) saturate(1.3);backdrop-filter:blur(18px) saturate(1.3);
   display:flex;flex-direction:column;
   opacity:0;pointer-events:none;transform:translateY(8px);
   transition:opacity .26s,transform .26s;
@@ -312,6 +337,7 @@ body.paused .eq i{animation-play-state:paused}
 </div>
 
 <div id="full">
+  <div id="fullAura"></div>
   <div class="ftext">
     <div class="ftrow">
       <div class="ft" id="ft">未播放</div>
@@ -321,7 +347,7 @@ body.paused .eq i{animation-play-state:paused}
     <div class="metatip" id="metatip"></div>
   </div>
   <div class="artwrap">
-    <div class="art" id="art"><div id="artimg"></div></div>
+    <div class="art" id="art"><div id="artimg"></div><div class="sheen"></div><div class="hole"></div></div>
     <div id="lyr">
       <div id="lyrBar"><div class="t">歌词</div><div class="x" id="lyrX">✕</div></div>
       <div id="lyrScr"></div>
@@ -951,6 +977,31 @@ window.onNativeState = function(s){
 
 var LYR_ACT = -1;
 
+// 封面取色氛围光晕：读封面图主色，映射到全屏页顶部柔和渐变
+function paintAura(src){
+  var au = $('fullAura');
+  if (!au) return;
+  var img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = function(){
+    try {
+      var c = document.createElement('canvas');
+      c.width = 32; c.height = 32;
+      var g = c.getContext('2d');
+      g.drawImage(img, 0, 0, 32, 32);
+      var d = g.getImageData(0, 0, 32, 32).data;
+      var r=0, gg=0, b=0, n=0;
+      for (var i=0;i<d.length;i+=16) { r+=d[i]; gg+=d[i+1]; b+=d[i+2]; n++; }
+      r=Math.round(r/n); gg=Math.round(gg/n); b=Math.round(b/n);
+      au.style.background =
+        'radial-gradient(120% 72% at 50% 6%, rgba('+r+','+gg+','+b+',.34), transparent 62%),' +
+        'radial-gradient(90% 60% at 50% 30%, rgba('+r+','+gg+','+b+',.12), transparent 60%)';
+    } catch(e){}
+  };
+  img.onerror = function(){};
+  img.src = src;
+}
+
 function resetMeta() {
   LYR_ACT = -1;
   window.__artist = '';
@@ -961,6 +1012,8 @@ function resetMeta() {
   $('artimg').style.backgroundImage = '';
   $('mcover').style.backgroundImage = '';
   $('mcover').textContent = '♪';
+  var au = $('fullAura');
+  if (au) au.style.background = 'radial-gradient(120% 70% at 50% 8%, rgba(109,140,255,.22), transparent 60%)';
   $('lyr').classList.remove('show');
   $('lyrScr').innerHTML = '';
   window.__lyrHas = false;
@@ -1002,6 +1055,9 @@ window.onMeta = function(idx, meta) {
     $('artimg').style.backgroundImage = 'url(' + meta.cover + ')';
     $('mcover').style.backgroundImage = 'url(' + meta.cover + ')';
     $('mcover').textContent = '';
+    paintAura(meta.cover);
+  } else {
+    $('fullAura').style.background = 'radial-gradient(120% 70% at 50% 8%, rgba(109,140,255,.22), transparent 60%)';
   }
   // 歌词
   window.__lyrHas = !!(meta && meta.lyrics && meta.lyrics.trim().length > 0);
