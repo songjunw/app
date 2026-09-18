@@ -124,7 +124,7 @@ final class FnosClient {
         ws = nil
         recvTask?.cancel()
         recvTask = nil
-        failAll(reason: "closed")
+        failAll("closed")
     }
 
     private func runReceiver(_ ws: URLSessionWebSocketTask) async {
@@ -132,9 +132,9 @@ final class FnosClient {
             do {
                 let msg = try await ws.receive()
                 switch msg {
-                case .string(let s): handle(text: s)
+                case .string(let s): handle(s)
                 case .data(let d):
-                    if let s = String(data: d, encoding: .utf8) { handle(text: s) }
+                    if let s = String(data: d, encoding: .utf8) { handle(s) }
                 @unknown default: break
                 }
             } catch {
@@ -267,7 +267,7 @@ final class FnosClient {
             "did": makeDid(),
         ]
         if let si = si { inner["si"] = si }
-        let outer = try encrypt(inner: inner)
+        var outer = try encrypt(inner: inner)
         outer["reqid"] = reqid
         let r = try await request(payload: outer, reqid: reqid, signed: false, stream: false, timeout: 30)
         if let e = r["errno"] as? Int, e != 0 { throw FnErr.login(FnosClient.errName(e)) }

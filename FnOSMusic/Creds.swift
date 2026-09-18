@@ -53,7 +53,7 @@ struct Creds {
         return s
     }
 
-    private static func write(key: String, value: String) {
+    private func write(key: String, value: String) {
         SecItemDelete(query(key: key) as CFDictionary)
         guard !value.isEmpty else { return }
         let q: [CFString: Any] = [
