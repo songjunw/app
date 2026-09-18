@@ -226,6 +226,13 @@ enum SyncManager {
             let n = try Store.shared.importPlaylist(plStr, configJson: cfgStr)
             creds.save()
 
+            // 诊断：记录第一首的完整播放 URL（origin + uri 拼接），确认中文/编码/签名格式
+            if let first = arr.first {
+                let u = first["uri"] as? String ?? ""
+                let full = u.hasPrefix("http") ? u : (origin + u)
+                SyncLog.step("SyncManager first play url: \(full.prefix(200))")
+            }
+
             res.ok = true
             res.count = n
             res.expireAt = Store.shared.expireAt

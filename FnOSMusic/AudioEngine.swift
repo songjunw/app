@@ -131,7 +131,10 @@ final class AudioEngine: NSObject {
         if let o = endObserver { NotificationCenter.default.removeObserver(o); endObserver = nil }
         removeKVO()
 
-        let asset = AVURLAsset(url: URL(string: t.url) ?? URL(fileURLWithPath: ""))
+        let playURL = resolveURL(t.url)
+        SyncLog.step("AudioEngine.openCurrent idx=\(t.idx) title=\(t.title)")
+        SyncLog.step("AudioEngine.openCurrent url=\(playURL.absoluteString)")
+        let asset = AVURLAsset(url: playURL)
         let item = AVPlayerItem(asset: asset)
         playerItem = item
         player?.replaceCurrentItem(with: item)
@@ -142,6 +145,23 @@ final class AudioEngine: NSObject {
         updateNowPlaying()
         notifyState()
         if autoplay { play() }
+    }
+
+    /// 健壮地解析播放地址：
+    /// - 先试 URL(string:)，含中文等非法字符会返回 nil
+    /// - 失败则对全串做 percent-encode（保留已编码的 % 和合法保留字符）再试
+    /// - 兜底空文件 URL（播放会失败，但不会崩）
+    private func resolveURL(_ raw: String) -> URL {
+        if let u = URL(string: raw), u.scheme != nil, u.host != nil {
+            return u
+        }
+        // 中文/空格等非法字符导致 URL(string:) 返回 nil，做一次兜底编码
+        if let enc = raw.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+           let u = URL(string: enc), u.scheme != nil, u.host != nil {
+            return u
+        }
+        SyncLog.step("AudioEngine.resolveURL FAIL: \(raw)")
+        return URL(fileURLWithPath: "")
     }
 
     func play() {
@@ -240,9 +260,14 @@ final class AudioEngine: NSObject {
         } else if keyPath == "status" {
             if let item = playerItem, item.status == .failed {
                 errorMsg = item.error?.localizedDescription ?? "播放失败"
+                let code = (item.error as NSError?)?.code ?? 0
+                SyncLog.step("AudioEngine.item FAILED code=\(code) err=\(errorMsg)")
                 notifyState()
             } else if let item = playerItem, item.status == .readyToPlay {
                 isLoading = false
+                SyncLog.step("AudioEngine.item readyToPlay")
+            } else if let item = playerItem, item.status == .unknown {
+                SyncLog.step("AudioEngine.item status=unknown")
             }
         }
     }
