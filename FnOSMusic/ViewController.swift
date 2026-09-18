@@ -24,7 +24,7 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
     override func viewDidLoad() {
         super.viewDidLoad()
         tracks = sampleTracks()
-        engine.setTracks(tracks)
+        engine.tracks = tracks
 
         let ctrl = WKUserContentController()
         let userScript = WKUserScript(source: shimScript(),

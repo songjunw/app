@@ -12,7 +12,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         do {
             let s = AVAudioSession.sharedInstance()
             try s.setCategory(.playback, mode: .default,
-                              options: [.allowAirPlay, .allowBluetooth])
+                              options: [.allowAirPlay, .allowBluetoothHFP])
             try s.setActive(true)
         } catch {
             print("AVAudioSession error: \(error)")
