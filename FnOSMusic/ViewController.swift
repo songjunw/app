@@ -33,6 +33,11 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
         webView.navigationDelegate = self
         webView.isOpaque = false
         webView.backgroundColor = .black
+        // 真正全屏：让 WebView 铺满屏幕，安全区交给 HTML 的 env(safe-area-inset-*) 处理
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.scrollView.bounces = false
+        webView.scrollView.showsVerticalScrollIndicator = false
+        webView.scrollView.showsHorizontalScrollIndicator = false
         view.addSubview(webView)
         engine.delegate = self
 
