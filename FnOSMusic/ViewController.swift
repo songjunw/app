@@ -8,6 +8,8 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
     private var webView: WKWebView!
     private let engine = AudioEngine()
     private var tracks: [Track] = []
+    /// 启动续播标记：等页面加载完成后再执行，保证播放状态能同步到 UI
+    private var pendingResume = true
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -57,6 +59,15 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
         ])
         engine.delegate = self
 
+        // 续播成功时给个提示，避免"一打开就自己响了"让人觉得莫名其妙
+        engine.onResumed = { [weak self] t, pos in
+            guard let self = self else { return }
+            if pos > 5000 {
+                self.eval("window.__toast && window.__toast(\(self.jsStr("继续播放：" + t.title)))")
+            }
+        }
+        observeAppLifecycle()
+
         if let url = Bundle.main.url(forResource: "player", withExtension: "html") {
             // 必须用文件 URL 加载：loadHTMLString 会让 viewport-fit=cover 失效、
             // env(safe-area-inset-*) 恒为 0，导致页面缩在中间上下留黑。
@@ -66,6 +77,21 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
 
     /// 页面底色，与 player.html 的 --bg (#0b0d12) 保持一致
     static let pageBg = UIColor(red: 11/255.0, green: 13/255.0, blue: 18/255.0, alpha: 1)
+
+    // MARK: - 断点续播
+
+    /// 退到后台 / 即将退出时立刻把播放位置落盘 —— 这是「下次打开继续播放」最关键的时机。
+    /// 只在进度回调里节流保存是不够的：用户可能听完一句就把 App 划掉。
+    private func observeAppLifecycle() {
+        let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(appDidEnterBackground),
+                       name: UIApplication.didEnterBackgroundNotification, object: nil)
+        nc.addObserver(self, selector: #selector(appWillTerminate),
+                       name: UIApplication.willTerminateNotification, object: nil)
+    }
+
+    @objc private func appDidEnterBackground() { engine.saveSnapshot(force: true) }
+    @objc private func appWillTerminate() { engine.saveSnapshot(force: true) }
 
     // MARK: - 曲库
 
@@ -258,6 +284,7 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
     private func doLogout() {
         Creds.clear()
         Store.shared.clearPlaylist()
+        engine.clearSnapshot()      // 清掉断点记录，避免下次打开去续播旧账号的歌
         loadTracksFromStore()
         engine.tracks = tracks
         injectState()
@@ -345,6 +372,16 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
     // MARK: - WKNavigationDelegate
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // 页面就绪后再执行启动续播：还原上次的曲目与进度并自动播放。
+        // 放在这里而不是 viewDidLoad，是为了让播放状态能立刻同步到页面 UI（封面/歌名/进度）。
+        if pendingResume {
+            pendingResume = false
+            engine.tracks = tracks
+            // 只在有真实曲库时续播：没有曲库时 tracks 是示例曲目，续播没有意义
+            if !Store.shared.tracks.isEmpty {
+                engine.resumeLastSession()   // 内部 notifyState → pushState
+            }
+        }
         pushState()
     }
 }

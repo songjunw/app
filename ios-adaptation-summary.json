@@ -1,0 +1,395 @@
+{
+  "document": {
+    "title": "fnOS 音乐 iOS 版 · Apple 平台适配技术总结",
+    "project": "FnOSMusic（飞牛音乐 iOS 版）",
+    "bundle_id": "com.fnos.music.FnOSMusic",
+    "deployment_target": "iOS 15.0+",
+    "tested_device": "iPhone 12 Pro Max / iOS 27",
+    "architecture": "Swift(UIKit) 原生薄壳 + WKWebView 渲染 UI + AVPlayer 播放音频",
+    "ui_layer": "player.html（90% UI/逻辑在 JS）",
+    "build_pipeline": "XcodeGen 生成工程 → GitHub Actions 无签名构建(CODE_SIGNING_ALLOWED=NO) → FnOSMusic-unsigned.ipa → SideStore/Aisi 侧载",
+    "generated_at": "2026-09-19",
+    "scope": "全屏适配、安全区、音频会话、后台播放、网络策略、Swift 崩溃陷阱、无签名构建链路"
+  },
+  "issues": [
+    {
+      "id": "fullscreen-letterbox",
+      "order": 1,
+      "title": "上下两端固定黑边，App 无法铺满整个屏幕（Letterbox / 兼容模式）",
+      "severity": "critical",
+      "symptom": "App 打开后屏幕上下各有一条固定黑色区域，内容整体被按屏幕宽度放大，中间内容区不到底、不到顶。改 CSS 的 100dvh、env(safe-area-inset-*) 全部无效。",
+      "first_wrong_hypothesis": "最初怀疑是网页视口/安全区问题（HTML 的 dvh、safe-area 计算），反复改前端 CSS 完全无效。",
+      "root_cause": "构建配置缺陷，与网页无关。project.yml 中只声明了 info.path 未声明 info.properties，XcodeGen 在执行 xcodegen generate 时会用它自己的 properties（空）重新生成 info.path 指向的 Info.plist，把仓库里手写的键全部覆盖删除。其中 UILaunchScreen 丢失后，iOS 找不到启动屏声明，判定该 App 不支持当前设备的屏幕比例，于是以『兼容模式 / Letterbox』渲染：按宽度等比放大、上下补黑边。",
+      "why_hard_to_find": [
+        "仓库里的 FnOSMusic/Info.plist 文件本身是完好的，只有在 CI 执行 xcodegen generate 之后才被覆盖 —— 本地直接看文件完全正常，开发者无法感知。",
+        "问题表现发生在 UI 层（黑边），而根因在构建配置层，跨了 3 个层级。",
+        "同一原因还静默破坏了后台音频（UIBackgroundModes）、明文 HTTP（NSAppTransportSecurity）、桌面图标名（CFBundleDisplayName），但当时都没被注意到。"
+      ],
+      "evidence": {
+        "method": "用 Python zipfile + plistlib 直接解包构建产物 ipa，读取 Payload/FnOSMusic.app/Info.plist 并打印全部键",
+        "finding": "构建出的 Info.plist 里只剩 XcodeGen 自动生成的 CFBundle* 键；UILaunchScreen、UIBackgroundModes、NSAppTransportSecurity、CFBundleDisplayName、UIStatusBarStyle、UISupportedInterfaceOrientations 全部缺失",
+        "conclusion": "确认为 Info.plist 被 XcodeGen 覆盖，而非网页视口问题"
+      },
+      "solution": [
+        "在 project.yml 的 targets.<Target>.info.properties 下把所有需要的键写全（16 个键），让 XcodeGen 生成的就是正确内容",
+        "本地 FnOSMusic/Info.plist 同步为完全一致的内容，做『双保险』（无论 CI 走生成还是直接用文件，结果都正确）",
+        "UILaunchScreen 指定 UIColorName: LaunchBg，并在 Assets.xcassets 新增 LaunchBg.colorset（深色 #0b0d12），避免启动瞬间白屏闪一下"
+      ],
+      "code": {
+        "project_yml": "targets:\n  FnOSMusic:\n    type: application\n    platform: iOS\n    sources:\n      - path: FnOSMusic\n    # ⚠️ 必须把 Info.plist 的所有键在这里写全。\n    # XcodeGen 在 xcodegen generate 时会用本节 properties 重新生成 info.path 指向的文件；\n    # 只写 path 不写 properties → 手写的键在 CI 构建时被整个覆盖，后果：\n    #   · UILaunchScreen 丢失 → iOS 认为 App 不支持当前机型 → 兼容(letterbox)渲染 → 上下黑边\n    #   · UIBackgroundModes 丢失 → 后台音频/锁屏连播失效\n    #   · NSAppTransportSecurity 丢失 → 明文 HTTP 被 ATS 拦截\n    info:\n      path: FnOSMusic/Info.plist\n      properties:\n        CFBundleDisplayName: 飞牛音乐\n        CFBundleName: FnOSMusic\n        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)\n        CFBundleExecutable: $(EXECUTABLE_NAME)\n        CFBundlePackageType: APPL\n        CFBundleDevelopmentRegion: en\n        CFBundleShortVersionString: \"1.0\"\n        CFBundleVersion: \"1\"\n        LSRequiresIPhoneOS: true\n        UILaunchScreen:\n          UIColorName: LaunchBg\n        UIBackgroundModes:\n          - audio\n        NSAppTransportSecurity:\n          NSAllowsArbitraryLoads: true\n        UIStatusBarStyle: UIStatusBarStyleLightContent\n        UIViewControllerBasedStatusBarAppearance: false\n        UISupportedInterfaceOrientations:\n          - UIInterfaceOrientationPortrait\n        UIRequiredDeviceCapabilities:\n          - arm64",
+        "verify_snippet": "import zipfile, plistlib\nd = plistlib.loads(zipfile.ZipFile('FnOSMusic-unsigned.ipa').read('Payload/FnOSMusic.app/Info.plist'))\nfor k in ['UILaunchScreen','UIBackgroundModes','NSAppTransportSecurity','CFBundleDisplayName']:\n    print(('OK  %-24s %r' % (k, d[k])) if k in d else ('缺失 %s' % k))"
+      },
+      "pitfall": "凡是『用代码生成配置文件』的工具链（XcodeGen / Tuist / CMake 等），都要确认生成动作是否会覆盖手写文件。规则：手写文件 + 生成器同时存在时，权威来源必须唯一 —— 要么全交给生成器（properties 写全），要么全手写（生成器别碰）。",
+      "lesson": "UI 层反复改无效时，要往上跳出 UI 层找根因；用『直接解包产物核对』代替『看源码推测』。"
+    },
+    {
+      "id": "webview-fullscreen-hosting",
+      "order": 2,
+      "title": "WKWebView 壳层铺满与安全区：内容不贴边、底部被 Home Indicator 顶起",
+      "severity": "high",
+      "symptom": "黑边修好后仍要保证：内容铺满整屏的同时，顶部不被刘海/灵动岛遮挡、底部不被 Home Indicator 遮挡。",
+      "root_cause": [
+        "1) WebView 若约束到 view.safeAreaLayoutGuide 会被系统自动缩进，安全区外侧露出底色（看起来像黑边）。",
+        "2) WKWebView 用 loadHTMLString 加载时不会应用 viewport-fit=cover，env(safe-area-inset-*) 恒为 0。",
+        "3) scrollView 的 contentInsetAdjustmentBehavior 默认会自动加 inset，导致内容二次偏移。"
+      ],
+      "solution": [
+        "WebView 用 AutoLayout 约束钉在 view 四条边（topAnchor/bottomAnchor/leadingAnchor/trailingAnchor），明确不用 safeAreaLayoutGuide",
+        "安全区完全交给 HTML 的 env(safe-area-inset-*) 处理，原生层不做补偿",
+        "contentInsetAdjustmentBehavior = .never，contentInset / scrollIndicatorInsets 全部清零",
+        "用 loadFileURL(_:allowingReadAccessTo:) 加载本地 HTML，而不是 loadHTMLString —— 后者不应用 viewport-fit",
+        "页面底色与原生底色统一为同一色值 #0b0d12，任何缝隙都不露白/露黑"
+      ],
+      "code": {
+        "swift": "webView = WKWebView(frame: view.bounds, configuration: cfg)\nwebView.navigationDelegate = self\nwebView.isOpaque = false\nwebView.backgroundColor = .clear\nwebView.scrollView.backgroundColor = .clear\nwebView.scrollView.contentInsetAdjustmentBehavior = .never\nwebView.scrollView.contentInset = .zero\nwebView.scrollView.scrollIndicatorInsets = .zero\nwebView.scrollView.bounces = false\nwebView.scrollView.showsVerticalScrollIndicator = false\nwebView.scrollView.showsHorizontalScrollIndicator = false\nview.addSubview(webView)\nwebView.translatesAutoresizingMaskIntoConstraints = false\nNSLayoutConstraint.activate([\n    webView.topAnchor.constraint(equalTo: view.topAnchor),      // 注意：view，不是 view.safeAreaLayoutGuide\n    webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),\n    webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),\n    webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),\n])\n// 加载本地 HTML：必须用 loadFileURL，loadHTMLString 不会应用 viewport-fit=cover\nlet url = Bundle.main.url(forResource: \"player\", withExtension: \"html\")!\nwebView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())",
+        "appdelegate": "let w = UIWindow(frame: UIScreen.main.bounds)\nw.backgroundColor = ViewController.pageBg      // 与 player.html 的 --bg 保持一致，避免闪白/黑缝\nw.rootViewController = ViewController()\nw.makeKeyAndVisible()\nwindow = w"
+      },
+      "pitfall": "『原生层做安全区 inset』和『网页层做 env(safe-area-inset-*)』只能选一个。两边都做 = 双重偏移；两边都不做 = 被遮挡。推荐：原生层全铺满 + 网页层全负责。"
+    },
+    {
+      "id": "safe-area-css",
+      "order": 3,
+      "title": "前端安全区适配体系（刘海 / 灵动岛 / Home Indicator / 横屏圆角）",
+      "severity": "high",
+      "symptom": "顶栏被状态栏/灵动岛压住、迷你播放条被 Home Indicator 顶起或压住、横屏时左右被圆角裁切。",
+      "root_cause": "移动端 Safari/WKWebView 只有在 viewport 声明 viewport-fit=cover 时才暴露 env(safe-area-inset-*)，且默认值为 0。",
+      "solution": [
+        "viewport meta 增加 viewport-fit=cover",
+        "在 :root 把四个方向的 env() 收成 CSS 变量 --sat/--sab/--sal/--sar，以便统一复用和调试",
+        "顶栏 padding-top 加 var(--sat)；底部栏高度与 padding 加 var(--sab)（先加高度再加 padding，避免内容被压）",
+        "全屏页四边分别用 calc(26px + var(--sar)) / calc(10px + var(--sab)) 等组合",
+        "html,body 用 height:100% + min-height:100dvh（dvh 处理 iOS 地址栏/工具栏引起的视口高度变化）"
+      ],
+      "code": {
+        "meta": "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover\">",
+        "css_root": ":root{\n  --sat:env(safe-area-inset-top,0px);\n  --sab:env(safe-area-inset-bottom,0px);\n  --sal:env(safe-area-inset-left,0px);\n  --sar:env(safe-area-inset-right,0px);\n}",
+        "css_usage": "html,body{height:100%;min-height:100dvh;overflow:hidden;background:var(--bg)}\n\n/* 顶栏 */\n#hd{padding:calc(10px + var(--sat)) 14px 8px}\n\n/* 底部迷你条：高度先加 sab，再用 padding 顶住 */\n#mini{height:calc(var(--bar) + var(--sab));padding:0 12px calc(var(--sab))}\n\n/* 全屏播放页：四边独立计算 */\n#full{padding:var(--sat) calc(26px + var(--sar)) calc(10px + var(--sab)) calc(26px + var(--sal))}"
+      },
+      "pitfall": "env() 没有 viewport-fit=cover 时静默返回 0，不会报错 —— 表现为『代码写了但完全没生效』，容易误判为浏览器不支持。排查时直接打印 getComputedStyle 里变量值最有效。"
+    },
+    {
+      "id": "background-audio-nowplaying",
+      "order": 4,
+      "title": "后台播放 / 锁屏连播 / 控制中心与耳机线控",
+      "severity": "high",
+      "symptom": "切后台或锁屏后音乐停止；锁屏界面没有歌曲信息与控制条；耳机线控无效。",
+      "root_cause": [
+        "1) 缺少 UIBackgroundModes: audio → 系统进入后台即挂起音频。",
+        "2) 未配置 AVAudioSession 类别，或只在启动时激活一次（被抢占后失效）。",
+        "3) 未注册 MPNowPlayingInfoCenter / MPRemoteCommandCenter。",
+        "4) 自动连播写在 JS 里 → 后台 JS 线程被挂起，播完不会切下一首。"
+      ],
+      "solution": [
+        "Info.plist 声明 UIBackgroundModes: [audio]（注意：曾被 XcodeGen 覆盖丢失，见 fullscreen-letterbox）",
+        "AppDelegate 启动时 setCategory(.playback, mode:.default, options:[.allowAirPlay,.allowBluetoothHFP]) 并 setActive(true)",
+        "每次起播前重新激活会话（防止被来电/其他 App 抢占后失效）",
+        "用 MPNowPlayingInfoCenter 写标题/歌手/时长/进度/封面，MPRemoteCommandCenter 注册 play/pause/toggle/next/prev",
+        "自动连播（AVPlayerItemDidPlayToEndTime 通知）在原生层实现，不依赖 JS"
+      ],
+      "code": {
+        "appdelegate": "let s = AVAudioSession.sharedInstance()\ntry s.setCategory(.playback, mode: .default, options: [.allowAirPlay, .allowBluetoothHFP])\ntry s.setActive(true)\nUIApplication.shared.beginReceivingRemoteControlEvents()",
+        "remote_command": "let rc = MPRemoteCommandCenter.shared()\nrc.playCommand.addTarget { [weak self] _ in self?.play(); return .success }\nrc.pauseCommand.addTarget { [weak self] _ in self?.pause(); return .success }\nrc.togglePlayPauseCommand.addTarget { [weak self] _ in self?.toggle(); return .success }",
+        "now_playing": "var info: [String: Any] = [:]\ninfo[MPMediaItemPropertyTitle] = t.title\ninfo[MPMediaItemPropertyArtist] = \"飞牛 NAS\"\ninfo[MPMediaItemPropertyAlbumTitle] = t.album.isEmpty ? \"音乐\" : t.album\ninfo[MPMediaItemPropertyPlaybackDuration] = Double(durationMs) / 1000.0\ninfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = Double(positionMs) / 1000.0\ninfo[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0\ninfo[MPMediaItemPropertyArtwork] = artwork()\nMPNowPlayingInfoCenter.default().nowPlayingInfo = info",
+        "auto_next": "endObserver = NotificationCenter.default.addObserver(\n    forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in\n    self?.onEnded()\n}"
+      },
+      "pitfall": "UIBackgroundModes 属于『丢了不报错但功能静默失效』的键，必须靠解包产物核对，不能只看源码。"
+    },
+    {
+      "id": "nsapptransportsecurity",
+      "order": 5,
+      "title": "ATS 拦截明文 HTTP（连不上 NAS / 无法下载）",
+      "severity": "medium",
+      "symptom": "日志/表现上是网络请求直接失败；NAS 走 http:// 或局域网 IP 时无法连接。",
+      "root_cause": "iOS 9+ 默认 App Transport Security 禁止明文 HTTP；且该键同样被 XcodeGen 覆盖丢失。",
+      "solution": "Info.plist 声明 NSAppTransportSecurity.NSAllowsArbitraryLoads = true（内网自建服务场景）；更严格的做法是只对特定域开 NSExceptionDomains。",
+      "code": {
+        "plist": "NSAppTransportSecurity:\n  NSAllowsArbitraryLoads: true"
+      },
+      "pitfall": "自定义 URLSession 配合自签证书时，还需实现 urlSession(_:didReceive:completionHandler:) 无条件信任（TrustAllDelegate），否则局域网自签 HTTPS 会被拒绝。"
+    },
+    {
+      "id": "swift-nsexception-crash",
+      "order": 6,
+      "title": "Swift 的 try? / do-catch 接不住 ObjC 抛出的 NSException（闪退家族根因）",
+      "severity": "critical",
+      "symptom": "点击同步/点歌时偶发闪退，且崩溃点难以定位（日志停在某个中间步骤）。",
+      "root_cause": "Swift 的错误处理只能捕获 conform Error 的 Swift 错误。Foundation/ObjC 在某些非法输入下抛的是 NSException（不是 Error），无法被 try?/do-catch 捕获，直接崩溃。",
+      "cases": [
+        {
+          "case_id": "json-top-level",
+          "desc": "JSONSerialization.jsonObject 对顶层不是 array/dictionary 的字符串抛 NSException",
+          "trigger": "把单个 JSON 字符串用 JSONSerialization 解析后强转为 [String: Any]",
+          "fix": "改用 JSONEncoder().encode([s]) 再剥掉外层数组，或先用 JSONSerialization.jsonObject(with:options:.fragmentsAllowed)",
+          "code": "// 反例（对 String 调用会抛 NSException，try? 接不住）：\n// let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]\n\n// 正解：用 JSONEncoder 包一层数组再剥壳\nfunc jsStr(_ s: String) -> String {\n    guard let d = try? JSONEncoder().encode([s]),\n          let arr = String(data: d, encoding: .utf8) else { return \"\\\"\\\"\" }\n    // arr 形如 [\"...\"]，去掉首尾方括号即得合法 JSON 字符串字面量\n    return String(arr.dropFirst().dropLast())\n}"
+        },
+        {
+          "case_id": "kvo-remove-unregistered",
+          "desc": "对未注册的 KVO 观察者调用 removeObserver 抛 NSException",
+          "trigger": "播放项频繁替换，removeKVO 时重复/未注册移除",
+          "fix": "用 bool 标志位记录是否已注册，仅在已注册时移除；player 与 item 分别清理",
+          "code": "private var timeObserved = false\n\nprivate func removeKVO() {\n    if timeObserved, let t = timeObserverToken {\n        player?.removeTimeObserver(t)\n        timeObserverToken = nil\n        timeObserved = false\n    }\n    if let i = kvoItem { i.removeObserver(self, forKeyPath: \"status\"); kvoItem = nil }\n}"
+        },
+        {
+          "case_id": "string-index-out-of-range",
+          "desc": "跨字符串使用另一个字符串的 String.Index 导致越界崩溃",
+          "trigger": "用 root.endIndex 去操作相对路径字符串做前缀裁剪",
+          "fix": "改用 dropFirst(root.count) 按长度裁剪，避免索引跨字符串",
+          "code": "// 反例：索引跨字符串，长度不一致时越界\n// let rel = String(dir[dir.index(root.endIndex, offsetBy: 0)...])\n\n// 正解：按长度裁剪\nlet rel = String(dir.dropFirst(root.count))"
+        }
+      ],
+      "general_rule": "凡是调用 Foundation/ObjC 的『可能抛 NSException』接口（JSONSerialization、KVO、String.Index、NSAttributedString、数组越界下标等），都要靠『类型检查 + 边界检查 + 状态标志位』预先规避，而不是指望 try? 兜底。",
+      "defensive_practice": "所有来自 JS 桥接的参数（args）访问前必须做 count 与类型双重判断。",
+      "code_defensive": "case \"toggleFavorite\":\n    guard let idx = args.first as? Int else { return }\n    // ... 而不是 args[0] 直接下标"
+    },
+    {
+      "id": "url-encoding-and-avplayer",
+      "order": 7,
+      "title": "含中文/空格的 URL 导致 AVPlayer 播不出（有封面无声音）",
+      "severity": "high",
+      "symptom": "点击歌曲后封面、歌名都正常显示，但没有声音、进度也不走秒。",
+      "root_cause": "NAS 上的文件路径含中文，URL(string:) 直接返回 nil（或生成了非法 URL），AVPlayer 拿不到有效资源；此外远程播放强依赖 HTTP Range，服务器不支持时也会卡住。",
+      "solution": [
+        "URL 解析加兜底：URL(string:) 失败后用 addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) 重新编码",
+        "给播放请求注入 Cookie（fnos-token）与移动端 UA，通过 AVURLAsset 的 AVURLAssetHTTPHeaderFieldsKey 传参（AVURLAsset 不会自动带上 URLSession 的 Cookie）",
+        "关闭 automaticallyWaitsToMinimizeStalling（远程中继流下『缓冲足够再播』的启发式可能永不满足）"
+      ],
+      "code": "private func resolveURL(_ raw: String) -> URL {\n    if let u = URL(string: raw) { return u }\n    if let enc = raw.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),\n       let u = URL(string: enc) { return u }\n    return URL(fileURLWithPath: \"\")\n}\n\n// 注入 Cookie 与 UA（AVURLAsset 不会自动继承 URLSession 的 Cookie）\nlet hdrs: [String: String] = [\n    \"Cookie\": Store.shared.cookie,      // 含 fnos-token\n    \"User-Agent\": \"Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15\",\n]\nlet asset = AVURLAsset(url: playURL, options: [\"AVURLAssetHTTPHeaderFieldsKey\": hdrs])\nlet item = AVPlayerItem(asset: asset)\nplayer = AVPlayer(playerItem: item)\np.automaticallyWaitsToMinimizeStalling = false   // 关掉『等缓冲』启发式",
+      "diagnostic_note": "当时通过 HEAD + Range: bytes=0-0 探测直链，记录 HTTP 状态码 / Content-Type / Content-Range，用来区分『URL 不可达』与『可达但 AVPlayer 播不出（鉴权/格式/Range 缺失）』。此探测代码为测试期临时手段，项目完成后已移除。"
+    },
+    {
+      "id": "playback-stability",
+      "order": 8,
+      "title": "播放稳定性：偶发『点了歌没声音、进度不走秒』",
+      "severity": "high",
+      "symptom": "打开 App 后点歌，封面已加载但不出声、进度条不动；重开或再点一次有时正常。",
+      "root_cause": [
+        "1) 音频会话只在启动时激活一次，被来电/其他 App 抢占或系统回收后失效，play() 会『成功但没声音』。",
+        "2) automaticallyWaitsToMinimizeStalling 在远程中继流下可能永远等不到『缓冲足够』。",
+        "3) 起播请求早于音频项就绪时被系统忽略，之后无人补发。",
+        "4) 没有任何卡死兜底。"
+      ],
+      "solution": [
+        "每次起播前重新激活音频会话",
+        "改用 playImmediately(atRate: 1.0) 立即起播，辅以 rate==0 时兜底 play()",
+        "在 AVPlayerItem status 变为 readyToPlay 时，若仍停着则补发一次起播",
+        "6 秒看门狗：仍未出声就重建播放项重试（最多 2 次）；若判定真在缓冲则给 10 秒宽限",
+        "监听 AVAudioSession.interruptionNotification，中断结束后自动抢回会话续播",
+        "失败时给用户可见 toast 提示（避免『点了没反应也没提示』）"
+      ],
+      "code": "// 1) 每次起播前激活会话\n@discardableResult\nprivate func activateAudioSession() -> Bool {\n    let s = AVAudioSession.sharedInstance()\n    do {\n        try s.setCategory(.playback, mode: .default, options: [.allowAirPlay, .allowBluetoothHFP])\n        try s.setActive(true)\n        return true\n    } catch { return false }\n}\n\n// 2) 立即起播 + 兜底\nactivateAudioSession()\nplayer.playImmediately(atRate: 1.0)\nif player.rate == 0 { player.play() }\n\n// 3) 就绪后补发（起播请求被吞的常见成因）\nif intentToPlay, let p = player, p.rate == 0 {\n    activateAudioSession()\n    p.playImmediately(atRate: 1.0)\n}\n\n// 4) 中断恢复\ninterruptionObserver = NotificationCenter.default.addObserver(\n    forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] n in\n    guard let self = self,\n          let raw = n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,\n          let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }\n    if type == .began {\n        self.isPlaying = false\n        self.notifyState()\n    } else if self.intentToPlay {\n        self.play()          // 中断结束，抢回会话续播\n    }\n}",
+      "design_note": "用 intentToPlay（播放意图）作为独立状态，而不是依赖 isPlaying：因为 play() 调用成功与真正出声之间存在时间差，isPlaying 不能作为『用户想要播放』的依据。"
+    },
+    {
+      "id": "wkwebview-js-bridge",
+      "order": 9,
+      "title": "WKWebView 与原生双向通信（UI 在网页、能力在原生）",
+      "severity": "medium",
+      "symptom": "网页里需要调用原生能力（播放控制、扫描曲库、取配置），原生需要回推状态给网页。",
+      "root_cause": "WKWebView 出于安全隔离，网页无法直接调用原生 API。",
+      "solution": [
+        "JS → 原生：WKScriptMessageHandler 注册名为 app 的 messageHandler，JS 侧用 window.webkit.messageHandlers.app.postMessage({m:'方法名', a:[参数]})",
+        "原生 → JS：evaluateJavaScript 调用页面暴露的全局回调（window.onNativeState / onNativeProgress 等）",
+        "注入时机：在 WKUserContentController 的 userScript（atDocumentStart）注入桥接脚本，保证页面加载前就绪",
+        "字符串参数必须用 JSON 编码后再拼接，避免引号/换行破坏 JS 语法"
+      ],
+      "code": {
+        "swift_setup": "let cc = WKUserContentController()\ncc.add(self, name: \"app\")\nlet cfg = WKWebViewConfiguration()\ncfg.userContentController = cc\ncfg.allowsInlineMediaPlayback = true\ncfg.mediaTypesRequiringUserActionForPlayback = []",
+        "js_side": "function post(o){ window.webkit.messageHandlers.app.postMessage(o); }\nvar App = {\n  play: function () { post({ m: 'play', a: [] }); },\n  setQueue: function (idxJson, startPos) { post({ m: 'setQueue', a: [idxJson, startPos || 0] }); }\n};",
+        "native_dispatch": "func userContentController(_ uc: WKUserContentController, didReceive msg: WKScriptMessage) {\n    guard let body = msg.body as? [String: Any],\n          let m = body[\"m\"] as? String else { return }\n    let args = body[\"a\"] as? [Any] ?? []\n    switch m {\n    case \"play\": engine.play()\n    case \"setQueue\":\n        guard let s = args.first as? String else { return }   // 边界检查\n        // ...\n    default: break\n    }\n}"
+      },
+      "pitfall": "注入的初始状态（如 window.__STAT__）必须用 JSON 序列化后写入，不能手拼字符串；JSONSerialization 对 String 顶层会抛 NSException（见 swift-nsexception-crash）。"
+    }
+  ],
+  "reusable_patterns": [
+    {
+      "name": "全屏 WKWebView 壳（原生全铺满 + 网页管安全区）",
+      "files": [
+        "ViewController.swift",
+        "AppDelegate.swift",
+        "player.html"
+      ],
+      "key_points": [
+        "WebView 约束到 view 而非 safeAreaLayoutGuide",
+        "contentInsetAdjustmentBehavior = .never 且所有 inset 清零",
+        "loadFileURL 而非 loadHTMLString（保证 viewport-fit=cover 生效）",
+        "原生底色与网页底色统一（#0b0d12），缝隙不露色",
+        "UIWindow 也设置 backgroundColor，避免启动/旋转瞬间闪白"
+      ]
+    },
+    {
+      "name": "安全区 CSS 变量体系",
+      "files": [
+        "player.html"
+      ],
+      "key_points": [
+        "viewport-fit=cover + :root 定义 --sat/--sab/--sal/--sar",
+        "顶部 padding 加 --sat；底部高度与 padding 加 --sab",
+        "100dvh 处理 iOS 视口高度变化"
+      ]
+    },
+    {
+      "name": "Info.plist 完整模板（iOS 音乐播放器类 App）",
+      "files": [
+        "project.yml",
+        "FnOSMusic/Info.plist"
+      ],
+      "must_have_keys": {
+        "UILaunchScreen": "缺失会导致 Letterbox 兼容模式渲染（上下黑边）",
+        "UIBackgroundModes: [audio]": "后台播放/锁屏连播",
+        "NSAppTransportSecurity.NSAllowsArbitraryLoads": "明文 HTTP（内网服务）",
+        "CFBundleDisplayName": "桌面图标名称",
+        "UIStatusBarStyle + UIViewControllerBasedStatusBarAppearance=false": "状态栏样式",
+        "UISupportedInterfaceOrientations": "锁定方向，避免旋转布局错乱",
+        "UIRequiredDeviceCapabilities: [arm64]": "声明设备能力"
+      }
+    },
+    {
+      "name": "原生音频引擎（AVPlayer + 会话 + 远程控制）",
+      "files": [
+        "AudioEngine.swift"
+      ],
+      "key_points": [
+        "每次起播激活会话 + playImmediately + 兜底 play()",
+        "readyToPlay 时补发起播（intentToPlay 状态）",
+        "看门狗重建播放项重试",
+        "中断通知恢复续播",
+        "MPNowPlayingInfoCenter + MPRemoteCommandCenter",
+        "播完自动下一曲在原生层完成（JS 会被挂起）"
+      ]
+    },
+    {
+      "name": "原生 ↔ JS 双向桥",
+      "files": [
+        "AppShim.js",
+        "ViewController.swift"
+      ],
+      "key_points": [
+        "WKScriptMessageHandler 名为 app；消息体 {m, a}",
+        "userScript atDocumentStart 注入桥接层",
+        "所有参数做 count/类型边界检查",
+        "字符串用 JSON 编码后拼接"
+      ]
+    },
+    {
+      "name": "Windows 上的 iOS 无签名构建链路",
+      "files": [
+        ".github/workflows/*.yml",
+        "project.yml"
+      ],
+      "key_points": [
+        "XcodeGen 生成工程 + xcodebuild CODE_SIGNING_ALLOWED=NO",
+        "产物 zip 套 ipa，下载后需自动剥壳",
+        "Azure Blob 下载会出现 302，需去掉 Authorization 重取",
+        "CI artifact 下载与监控可用 Python 脚本自动化"
+      ]
+    }
+  ],
+  "verification_methods": [
+    {
+      "goal": "确认构建产物的 Info.plist 键完整（防止被 XcodeGen 覆盖）",
+      "method": "解包 ipa 用 plistlib 读取 Payload/<App>.app/Info.plist，逐键断言",
+      "code": "import zipfile, plistlib\nd = plistlib.loads(zipfile.ZipFile('FnOSMusic-unsigned.ipa').read('Payload/FnOSMusic.app/Info.plist'))\nfor k in ['UILaunchScreen','UIBackgroundModes','NSAppTransportSecurity','CFBundleDisplayName']:\n    assert k in d, k + ' 缺失'"
+    },
+    {
+      "goal": "一眼判定是否处于 Letterbox 兼容模式",
+      "method": "对比 UIScreen.bounds×scale 与 nativeBounds；两者一致才是真正铺满",
+      "code": "let s = UIScreen.main\nlet renderedW = s.bounds.width * s.scale\nlet renderedH = s.bounds.height * s.scale\nlet full = abs(renderedW - s.nativeBounds.width) < 1 && abs(renderedH - s.nativeBounds.height) < 1\n// full == false 即处于兼容/letterbox 模式"
+    },
+    {
+      "goal": "确认安全区 env() 是否真的生效",
+      "method": "在页面内读取 getComputedStyle(document.documentElement).getPropertyValue('--sat')，为 0px 说明 viewport-fit=cover 未生效"
+    },
+    {
+      "goal": "校验网页内嵌 JS 语法（大段删除后尤其必要）",
+      "method": "提取 <script> 内容后交给 node --check"
+    },
+    {
+      "goal": "确认清理类改动无残留",
+      "method": "grep 关键字（新旧符号名）确认 0 命中，并核对 git diff 为纯删除"
+    }
+  ],
+  "troubleshooting_cheatsheet": [
+    {
+      "symptom": "上下固定黑边，内容被放大",
+      "likely_cause": "Info.plist 缺 UILaunchScreen → Letterbox 兼容模式",
+      "action": "解包 ipa 核对 UILaunchScreen；项目含生成器时检查 properties 是否写全"
+    },
+    {
+      "symptom": "顶部被刘海压 / 底部被 Home Indicator 压",
+      "likely_cause": "env(safe-area-inset-*) 未生效或未使用",
+      "action": "确认 viewport-fit=cover + 用 loadFileURL 加载"
+    },
+    {
+      "symptom": "内容整体被缩进、外侧露底色",
+      "likely_cause": "WebView 约束到了 safeAreaLayoutGuide",
+      "action": "改为约束到 view 四边"
+    },
+    {
+      "symptom": "锁屏后停止播放",
+      "likely_cause": "缺 UIBackgroundModes: audio",
+      "action": "补键并解包核对"
+    },
+    {
+      "symptom": "明文 HTTP 请求失败",
+      "likely_cause": "ATS 拦截",
+      "action": "NSAppTransportSecurity 放行"
+    },
+    {
+      "symptom": "点击后闪退、无堆栈线索",
+      "likely_cause": "ObjC NSException 未被捕获（JSONSerialization / KVO / String.Index）",
+      "action": "改为类型检查 + 边界检查 + 状态标志位"
+    },
+    {
+      "symptom": "有封面无声音、进度不走秒",
+      "likely_cause": "URL 中文未编码 / 会话未激活 / 起播请求被吞 / 等缓冲启发式",
+      "action": "URL 编码兜底 + 每次起播激活会话 + playImmediately + 就绪补发 + 看门狗"
+    },
+    {
+      "symptom": "播完不自动下一曲（后台）",
+      "likely_cause": "连播逻辑在 JS 里，后台被挂起",
+      "action": "移到原生层监听 AVPlayerItemDidPlayToEndTime"
+    }
+  ],
+  "pre_delivery_checklist": [
+    "解包 ipa 核对 Info.plist 关键键（UILaunchScreen / UIBackgroundModes / ATS / 显示名）",
+    "确认未处于 Letterbox 模式（bounds×scale == nativeBounds）",
+    "安全区四个方向 env() 取值非 0（真机）",
+    "内嵌 JS 过 node --check；HTML 标签配平",
+    "清理类改动 grep 无残留，git diff 为纯删除",
+    "后台播放 / 锁屏控制条 / 耳机线控在真机验证",
+    "含中文路径的歌曲能正常播放"
+  ],
+  "engineering_notes": {
+    "config_source_of_truth": "手写配置与生成器配置同时存在时，权威来源必须唯一。本项目最终做法：project.yml 的 properties 写全，Info.plist 同步为相同内容。",
+    "ui_layer_choice": "UI 全放在 player.html（JS）里，原生只做薄壳（播放/扫描/存储/系统集成）。好处是 UI 迭代不必重新编译；代价是系统能力必须逐个桥接。",
+    "iteration_practice": "iOS 侧无法在本机（Windows）编译验证，因此每次交付前都用『解包产物核对』代替『相信源码』。",
+    "batch_edit_pitfall": "不要对同一个文件并发发起多条编辑：每条都报成功但会互相覆盖，最终只落盘最后一条。大范围清理应回到干净基准后用一次性脚本逐条断言替换。"
+  },
+  "environment_notes": {
+    "host": "Windows（无 Xcode，无法本地构建 iOS）",
+    "ci": "GitHub Actions，无签名构建，产出 FnOSMusic-unsigned.ipa",
+    "side_load": "SideStore / Aisi 等签名工具侧载",
+    "download_workaround": "CI artifact 为 zip 套 ipa；Azure Blob 链接会 302 重定向，需去掉 Authorization 头重新请求",
+    "push_workaround": "网络策略限制 git push（github.com 被拦、api.github.com 可用）时，改用 GitHub Git Data API 提交（blob → tree → commit → 更新 ref），效果与 git push 等价并能触发 CI"
+  }
+}

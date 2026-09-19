@@ -957,6 +957,8 @@ function toast(msg){
   clearTimeout(tt);
   tt = setTimeout(function(){ el.classList.remove('on'); }, 2400);
 }
+// 暴露给原生层调用（例如启动续播时提示"继续播放：xxx"）
+window.__toast = toast;
 
 boot();
 firstRun();

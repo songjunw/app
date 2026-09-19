@@ -12,6 +12,18 @@ struct Track {
     let size: Int
 }
 
+/// 断点续播快照：记录「上次在听哪首、听到哪、队列是什么」，用 UserDefaults 落盘。
+/// 曲库重新同步后索引可能变化，所以额外存 title/album 做兜底匹配。
+struct PlaybackSnapshot: Codable {
+    var idx: Int            // 曲目索引
+    var title: String       // 歌名（兜底匹配用）
+    var album: String       // 专辑/目录（兜底匹配用）
+    var positionMs: Int     // 播放位置
+    var queueIdxs: [Int]    // 当时的播放队列
+    var mode: Int           // 播放模式
+    var savedAt: Double     // 记录时间（秒）
+}
+
 protocol AudioEngineDelegate: AnyObject {
     func engineStateChanged()
     func engineProgress(posMs: Int, durMs: Int, bufPct: Int)
@@ -42,6 +54,19 @@ final class AudioEngine: NSObject {
     private var watchdog: DispatchWorkItem?
     private var stallRetries = 0
     private var bufferGraceUsed = false
+
+    // MARK: - 断点续播状态
+
+    private static let snapshotKey = "FnOSMusic.playbackSnapshot"
+    /// 待执行的 seek（openCurrent 时消费一次）
+    private var pendingSeekMs: Int = 0
+    /// 本次恢复的目标位置：重建播放项重试后需要重新 seek，真正播放起来后清空
+    private var resumeSeekMs: Int = 0
+    /// 上次落盘时间，用于节流（进度回调每 0.5s 一次，不能每次都写盘）
+    private var lastSnapshotAt: TimeInterval = 0
+
+    /// 成功恢复到上次播放时回调（曲目, 位置毫秒），供 UI 给个提示
+    var onResumed: ((Track, Int) -> Void)?
 
     var tracks: [Track] = []
     private var queue: [Track] = []
@@ -132,6 +157,86 @@ final class AudioEngine: NSObject {
         return queue[qpos]
     }
 
+    // MARK: - 断点续播（记录 / 恢复）
+
+    /// 记录当前播放状态。默认节流 5 秒一次；
+    /// force = true 用于「暂停 / 切歌 / 退到后台 / 退出」这些关键时机，立即落盘。
+    func saveSnapshot(force: Bool = false) {
+        guard let t = currentTrack else { return }
+        let now = Date().timeIntervalSince1970
+        if !force, now - lastSnapshotAt < 5 { return }
+        lastSnapshotAt = now
+
+        // 以播放器实际时间为准（比缓存的 positionMs 新）
+        var pos = positionMs
+        if let p = player {
+            let s = CMTimeGetSeconds(p.currentTime())
+            if s.isFinite { pos = Int(s * 1000) }
+        }
+        if pos < 0 { pos = 0 }
+        // 已接近结尾：记为从头开始，避免下次打开瞬间触发「播完 → 自动下一曲」
+        if durationMs > 0, pos > durationMs - 5000 { pos = 0 }
+
+        let snap = PlaybackSnapshot(idx: t.idx, title: t.title, album: t.album,
+                                    positionMs: pos,
+                                    queueIdxs: queue.map { $0.idx },
+                                    mode: mode, savedAt: now)
+        if let d = try? JSONEncoder().encode(snap) {
+            UserDefaults.standard.set(d, forKey: Self.snapshotKey)
+        }
+    }
+
+    /// 清掉断点记录（退出登录 / 曲库清空时调用，避免下次打开还去续播旧账号的歌）
+    func clearSnapshot() {
+        UserDefaults.standard.removeObject(forKey: Self.snapshotKey)
+        lastSnapshotAt = 0
+    }
+
+    /// 启动续播：读出上次记录，还原队列、曲目、位置并自动播放。返回是否恢复成功。
+    @discardableResult
+    func resumeLastSession() -> Bool {
+        guard !tracks.isEmpty,
+              let d = UserDefaults.standard.data(forKey: Self.snapshotKey),
+              let snap = try? JSONDecoder().decode(PlaybackSnapshot.self, from: d) else { return false }
+
+        // 先按索引找；曲库重新同步后索引可能变了，退化成「歌名 + 专辑」匹配
+        var hit = tracks.first(where: { $0.idx == snap.idx })
+        if hit == nil {
+            hit = tracks.first(where: { $0.title == snap.title && $0.album == snap.album })
+        }
+        guard let target = hit else {
+            // 曲库里找不到（可能这次曲库还没同步好）→ 保留记录，下次启动再试。
+            // 只有明确退出登录时才由 clearSnapshot() 清除。
+            return false
+        }
+
+        // 还原队列（已不在库中的曲目直接丢弃）
+        var q: [Track] = snap.queueIdxs.compactMap { i in tracks.first(where: { $0.idx == i }) }
+        if q.isEmpty { q = tracks }
+        guard let pos = q.firstIndex(where: { $0.idx == target.idx }) else { return false }
+
+        mode = snap.mode
+        queue = q
+        qpos = pos
+        let seekTo = max(0, snap.positionMs)
+        resumeSeekMs = seekTo
+        pendingSeekMs = seekTo
+        lastSnapshotAt = 0
+
+        openCurrent(autoplay: true)
+        onResumed?(target, seekTo)
+        return true
+    }
+
+    /// 执行待恢复的 seek（在起播前调用；未就绪时 AVPlayer 会自行排队，就绪后再补一次更稳）
+    private func applyPendingSeek() {
+        guard pendingSeekMs > 0, let player = player else { return }
+        let ms = pendingSeekMs
+        pendingSeekMs = 0
+        let target = CMTime(seconds: Double(ms) / 1000.0, preferredTimescale: 1000)
+        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
     // MARK: - 播放
 
     private func openCurrent(autoplay: Bool, isRetry: Bool = false) {
@@ -140,6 +245,9 @@ final class AudioEngine: NSObject {
         isLoading = true
         errorMsg = ""
         intentToPlay = autoplay
+        // 切歌即重置进度缓存：否则这期间若落盘会把「上一首的位置」记到新曲上
+        positionMs = 0
+        durationMs = 0
         if !isRetry {
             stallRetries = 0
             bufferGraceUsed = false
@@ -165,10 +273,19 @@ final class AudioEngine: NSObject {
         setupKVO()
         setupEndObserver(for: item)
         updateNowPlaying()
+
+        // 断点续播：起播前先 seek 到上次的位置
+        applyPendingSeek()
+
         notifyState()
         if autoplay {
             play()
             armWatchdog()
+        }
+        // 切歌即记录当前曲目：即便马上杀掉 App，下次也知道"上次在听哪首"。
+        // 正在做断点恢复时不写（此刻 seek 还没完成，位置会被误写成 0，反而把断点抹掉）。
+        if resumeSeekMs == 0 {
+            saveSnapshot(force: true)
         }
     }
 
@@ -207,6 +324,8 @@ final class AudioEngine: NSObject {
         player?.pause()
         isPlaying = false
         isLoading = false
+        // 暂停是「用户停下来」的关键时机，立即记录位置
+        saveSnapshot(force: true)
         updateNowPlayingPlaybackState()
         notifyState()
     }
@@ -284,6 +403,8 @@ final class AudioEngine: NSObject {
         }
         stallRetries += 1
         activateAudioSession()
+        // 重建播放项会丢掉当前位置，续播场景要重新回到断点
+        if resumeSeekMs > 0 { pendingSeekMs = resumeSeekMs }
         openCurrent(autoplay: true, isRetry: true)
     }
 
@@ -339,6 +460,8 @@ final class AudioEngine: NSObject {
             durationMs = Int(dur.seconds * 1000)
         }
         delegate?.engineProgress(posMs: positionMs, durMs: durationMs, bufPct: 0)
+        // 播放中每 5 秒落盘一次断点（内部节流，不会每次都写 UserDefaults）
+        saveSnapshot()
     }
 
     override func observeValue(forKeyPath keyPath: String?,
@@ -350,6 +473,7 @@ final class AudioEngine: NSObject {
             switch st {
             case .playing:
                 isPlaying = true; isLoading = false
+                resumeSeekMs = 0        // 已正常播放，断点位置的兜底逻辑不再需要
             case .waitingToPlayAtSpecifiedRate:
                 isLoading = true; isPlaying = false
             default:
@@ -364,6 +488,16 @@ final class AudioEngine: NSObject {
                 delegate?.engineError("播放失败：\(errorMsg)")
             } else if let item = playerItem, item.status == .readyToPlay {
                 isLoading = false
+                // 断点续播：未就绪时发出的 seek 可能被忽略，这里补一次
+                applyPendingSeek()
+                // 上次是在末尾附近退出的 → 从头开始，避免一打开就「播完 → 跳下一曲」
+                if resumeSeekMs > 0, let p = player, item.duration.seconds.isFinite,
+                   item.duration.seconds > 0,
+                   CMTimeGetSeconds(p.currentTime()) > item.duration.seconds - 5 {
+                    resumeSeekMs = 0
+                    pendingSeekMs = 0
+                    p.seek(to: .zero)
+                }
                 // 起播请求可能早于"就绪"被系统吞掉 → 这里补发一次，这是"没声音也没走秒"的常见成因
                 if intentToPlay, let p = player, p.rate == 0 {
                     activateAudioSession()
