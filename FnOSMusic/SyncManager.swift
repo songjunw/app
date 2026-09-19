@@ -31,9 +31,8 @@ enum SyncManager {
         var uri = ""
     }
 
-    /// 统一打点：既落盘（崩溃后可追溯），也推给 UI（用户实时可见）
+    /// 统一步骤提示，推给 UI
     private static func tick(_ msg: String, _ onProgress: @escaping (String) -> Void) {
-        SyncLog.step(msg)
         onProgress(msg)
     }
 
@@ -41,7 +40,6 @@ enum SyncManager {
         var res = Result(ok: false, count: 0, msg: "")
         var main: FnosClient? = nil
         var fc: FnosClient? = nil
-        SyncLog.begin()
         defer {
             main?.close()
             fc?.close()
@@ -64,11 +62,9 @@ enum SyncManager {
             try await m.connect(type: "main")
             tick("② 已连接，正在获取密钥 …", onProgress)
             try await m.fetchPub()
-            SyncLog.step("SyncManager.fetchPub returned")
             tick("③ 正在登录 \(creds.user) …", onProgress)
             try await m.login(user: creds.user, password: creds.pass, deviceName: "iOS-Player")
 
-            SyncLog.step("SyncManager.login returned")
             let token = m.getToken()
             guard !token.isEmpty else { throw SyncErr("登录成功，但没有拿到 token") }
             tick("④ 登录成功，正在建立文件通道 …", onProgress)
@@ -181,13 +177,6 @@ enum SyncManager {
             let n = try Store.shared.importPlaylist(plStr, configJson: cfgStr)
             creds.save()
 
-            // 诊断：记录第一首的完整播放 URL（origin + uri 拼接），确认中文/编码/签名格式
-            if let first = arr.first {
-                let u = first["uri"] as? String ?? ""
-                let full = u.hasPrefix("http") ? u : (origin + u)
-                SyncLog.step("SyncManager first play url: \(full.prefix(200))")
-            }
-
             res.ok = true
             res.count = n
             res.expireAt = Store.shared.expireAt
@@ -199,10 +188,8 @@ enum SyncManager {
         } catch {
             res.ok = false
             res.msg = error.localizedDescription
-            SyncLog.step("✗ 出错：" + res.msg)
         }
 
-        SyncLog.finish(ok: res.ok)
         return res
     }
 

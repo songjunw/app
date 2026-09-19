@@ -67,38 +67,6 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
     /// 页面底色，与 player.html 的 --bg (#0b0d12) 保持一致
     static let pageBg = UIColor(red: 11/255.0, green: 13/255.0, blue: 18/255.0, alpha: 1)
 
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        // 等一帧，确保拿到最终布局再打点
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            self?.logLayout()
-        }
-    }
-
-    // MARK: - 布局诊断（测试期用，项目完成后移除）
-
-    /// 把屏幕/窗口/WebView 的实际尺寸与安全区推给页面的运行日志面板。
-    ///
-    /// 为什么需要：App 若缺少 UILaunchScreen，iOS 会按"兼容模式"渲染（按宽度放大、上下补黑边），
-    /// 此时 `UIScreen.bounds` 会比机型真实逻辑尺寸小。用 `bounds × scale` 和 `nativeBounds`
-    /// 对比即可一眼判定是否铺满；nativeBounds 无论兼容与否都返回真实物理像素。
-    private func logLayout() {
-        let s = UIScreen.main
-        let w = s.bounds.width * s.scale
-        let h = s.bounds.height * s.scale
-        let full = abs(w - s.nativeBounds.width) < 1 && abs(h - s.nativeBounds.height) < 1
-        let msg = "[布局] " + (full ? "已铺满✅" : "未铺满❌(疑似兼容/letterbox模式)")
-            + " screen=\(Int(s.bounds.width))x\(Int(s.bounds.height))"
-            + " native=\(Int(s.nativeBounds.width))x\(Int(s.nativeBounds.height))"
-            + " scale=\(Int(s.scale))"
-            + " rendered=\(Int(w))x\(Int(h))"
-            + " view=\(Int(view.bounds.width))x\(Int(view.bounds.height))"
-            + " web=\(Int(webView.frame.width))x\(Int(webView.frame.height))"
-            + " safeTop=\(Int(view.safeAreaInsets.top)) safeBottom=\(Int(view.safeAreaInsets.bottom))"
-        SyncLog.step(msg)
-        engineLog(msg)
-    }
-
     // MARK: - 曲库
 
     private func loadTracksFromStore() {
@@ -140,8 +108,7 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
             "\nwindow.__ACCOUNT__ = \(accountJSON());" +
             "\nwindow.__FAVS__ = \(favsJSON());" +
             "\nwindow.__favIdxs = \(favIdxsJSON());" +
-            "\nwindow.__STAT__ = \(statJSON());" +
-            "\nwindow.__SYNCTRACE__ = \(traceJSON());\n"
+            "\nwindow.__STAT__ = \(statJSON());\n"
         return js
     }
 
@@ -182,11 +149,6 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
         f.timeZone = TimeZone(identifier: "UTC")
         if let d = f.date(from: iso) { return d.timeIntervalSince1970 * 1000 }
         return 0
-    }
-
-    /// 上次同步的落盘日志 + 是否异常中断（崩溃后重开可看到停在第几步）
-    private func traceJSON() -> String {
-        return jsonString(["crashed": SyncLog.crashed, "trace": SyncLog.trace])
     }
 
     private func jsonString(_ obj: Any) -> String {
@@ -308,8 +270,7 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
                  "window.__ACCOUNT__ = \(accountJSON());" +
                  "window.__FAVS__ = \(favsJSON());" +
                  "window.__favIdxs = \(favIdxsJSON());" +
-                 "window.__STAT__ = \(statJSON());" +
-                 "window.__SYNCTRACE__ = \(traceJSON());"
+                 "window.__STAT__ = \(statJSON());"
         eval(js)
     }
 
@@ -351,15 +312,6 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
         DispatchQueue.main.async {
             self.webView.evaluateJavaScript(
                 "window.onNativeProgress && window.onNativeProgress(\(posMs),\(durMs),\(bufPct))",
-                completionHandler: nil)
-        }
-    }
-
-    /// 播放引擎的运行日志 → 实时推给 JS 的 onNativeLog（测试期可见，项目完成后再移除）
-    func engineLog(_ line: String) {
-        DispatchQueue.main.async {
-            self.webView.evaluateJavaScript(
-                "window.onNativeLog && window.onNativeLog(\(self.jsStr(line)))",
                 completionHandler: nil)
         }
     }

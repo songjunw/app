@@ -254,16 +254,6 @@ body.paused .eq i{animation-play-state:paused}
 #sheet .prog.err{color:#f87171;border-color:#5b2b2b}
 #sheet .prog.ok{color:#4ade80;border-color:#2b5b3a}
 
-/* ---------- 同步日志（崩溃后定位用） ---------- */
-.seclog{margin-top:10px;border:1px solid var(--line);border-radius:9px;background:var(--panel2);overflow:hidden}
-.seclog .loghd{font-size:11.5px;color:var(--txt3);padding:8px 10px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
-.seclog .loghd span{color:var(--acc);cursor:pointer;padding:2px 6px}
-.seclog .loghd span:active{opacity:.6}
-.seclog .loghd .lgacts{display:flex;gap:4px}
-.seclog .loghd .lgacts span{border:1px solid var(--line);border-radius:6px;font-size:10.5px;padding:3px 8px}
-.seclog pre{margin:0;padding:9px 10px;font-size:11px;line-height:1.65;color:var(--txt2);white-space:pre-wrap;word-break:break-all;max-height:220px;overflow-y:auto;
-  font-family:ui-monospace,Menlo,Consolas,monospace}
-
 #toast{
   position:fixed;left:50%;bottom:calc(var(--bar) + var(--sab) + 22px);transform:translateX(-50%) translateY(14px);
   background:#1c2230;border:1px solid var(--line);color:var(--txt);
@@ -375,16 +365,6 @@ body.paused .eq i{animation-play-state:paused}
       </div>
 
       <div class="prog" id="syncBar" style="display:none"></div>
-      <div class="seclog" id="syncLogBox">
-        <div class="loghd">运行日志（测试期定位问题用）
-          <span class="lgacts">
-            <span id="syncLogRefresh">刷新</span>
-            <span id="syncLogCopy">复制</span>
-            <span id="syncLogClear">清空</span>
-          </span>
-        </div>
-        <pre id="syncLog">（暂无日志。点同步或播放后会实时记录到这里。）</pre>
-      </div>
     </div>
 
     <button class="btn ghost" id="btnClose">关闭</button>
@@ -420,23 +400,6 @@ function boot(){
   render(true);
   updateHeader();
   fillInfo();
-  logViewport();
-}
-
-// 视口诊断（测试期用，项目完成后移除）：确认是否铺满、安全区是否生效
-function logViewport(){
-  try {
-    var cs = getComputedStyle(document.documentElement);
-    var sat = cs.getPropertyValue('--sat').trim() || '0px';
-    var sab = cs.getPropertyValue('--sab').trim() || '0px';
-    var dpr = window.devicePixelRatio || 1;
-    logLine('[视口] inner=' + window.innerWidth + 'x' + window.innerHeight
-          + ' screen=' + screen.width + 'x' + screen.height
-          + ' dpr=' + dpr
-          + ' 物理=' + Math.round(window.innerWidth*dpr) + 'x' + Math.round(window.innerHeight*dpr)
-          + ' 安全区top=' + sat + ' bottom=' + sab
-          + (sat === '0px' ? ' ⚠️安全区为0(viewport-fit未生效)' : ''));
-  } catch(e){}
 }
 
 // 首次启动、还没有任何曲目时，直接把登录抽屉推到用户面前
@@ -755,7 +718,6 @@ function loadAcc(){
     $('aLast').textContent   = fmtAgo(ACC.lastSync);
   }
   if (ACC.running) { setBusy(true); showProg('同步进行中…'); }
-  renderSyncLog();
 }
 
 function showProg(msg, kind){
@@ -765,55 +727,6 @@ function showProg(msg, kind){
   p.textContent = msg;
   try { p.scrollIntoView({ block:'nearest' }); } catch(e){}
 }
-
-// ---------- 运行日志（测试期定位问题用，项目完成后再移除） ----------
-// 实时日志缓冲：原生 onNativeLog 每行追加到这里，也会合并进"同步日志"
-var __liveLog = [];
-
-function logLine(line){
-  __liveLog.push(line);
-  if (__liveLog.length > 500) __liveLog = __liveLog.slice(-500);
-  paintLog();
-}
-
-function paintLog(){
-  var el = $('syncLog');
-  if (!el) return;
-  var t = { crashed:false, trace:'' };
-  try { if (HAS_APP) t = JSON.parse(App.getSyncTrace()) || t; } catch(e){}
-  var parts = [];
-  if (__liveLog.length) parts.push('【实时运行日志】\n' + __liveLog.join('\n'));
-  if (t.trace) parts.push('【同步落盘日志】\n' + t.trace);
-  el.textContent = parts.length ? parts.join('\n\n') : '（暂无日志）';
-  el.scrollTop = el.scrollHeight;
-}
-
-// 崩溃（闪退）后重开能看到停在第几步；现在也常驻显示
-function renderSyncLog(force){
-  paintLog();
-}
-
-// 原生实时日志入口
-window.onNativeLog = function(line){
-  logLine(line);
-};
-
-$('syncLogRefresh').addEventListener('click', function(){ paintLog(); toast('日志已刷新'); });
-
-$('syncLogCopy').addEventListener('click', function(){
-  var ta = document.createElement('textarea');
-  ta.value = $('syncLog').textContent || '';
-  document.body.appendChild(ta);
-  ta.select();
-  try { document.execCommand('copy'); toast('日志已复制'); } catch(e){}
-  document.body.removeChild(ta);
-});
-
-$('syncLogClear').addEventListener('click', function(){
-  __liveLog = [];
-  paintLog();
-  toast('实时日志已清空');
-});
 
 function setBusy(b){
   syncing = b;
@@ -885,7 +798,6 @@ window.onSyncResult = function(r){
   } else {
     showProg('同步失败：' + (r && r.msg ? r.msg : '未知错误'), 'err');
     toast('同步失败');
-    renderSyncLog(true);
   }
 };
 

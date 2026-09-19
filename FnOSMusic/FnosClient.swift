@@ -122,7 +122,6 @@ final class FnosClient {
         guard let url = URL(string: "wss://\(host)/websocket?type=\(type)") else {
             throw FnErr.proto("非法地址")
         }
-        SyncLog.step("Fnos.connect enter type=\(type)")
         var req = URLRequest(url: url)
         req.timeoutInterval = timeout
         req.setValue(ua, forHTTPHeaderField: "User-Agent")
@@ -135,7 +134,6 @@ final class FnosClient {
         self.ws = ws
         ws.resume()
         recvTask = Task { await runReceiver(ws) }
-        SyncLog.step("Fnos.connect ready type=\(type)")
     }
 
     func close() {
@@ -149,23 +147,18 @@ final class FnosClient {
     }
 
     private func runReceiver(_ ws: URLSessionWebSocketTask) async {
-        SyncLog.step("Fnos.runReceiver start")
         while true {
             do {
                 let msg = try await ws.receive()
                 switch msg {
                 case .string(let s):
-                    SyncLog.step("Fnos.runReceiver string len=\(s.count)")
                     handle(s)
                 case .data(let d):
-                    SyncLog.step("Fnos.runReceiver data len=\(d.count)")
                     if let s = String(data: d, encoding: .utf8) { handle(s) }
                 @unknown default:
-                    SyncLog.step("Fnos.runReceiver unknown")
                     break
                 }
             } catch {
-                SyncLog.step("Fnos.runReceiver error: \(error.localizedDescription)")
                 failAll("recv: \(error.localizedDescription)")
                 return
             }
@@ -173,15 +166,12 @@ final class FnosClient {
     }
 
     private func handle(_ text: String) {
-        SyncLog.step("Fnos.handle enter len=\(text.count)")
         guard let j = text.firstIndex(of: "{") else {
-            SyncLog.step("Fnos.handle no brace")
             return
         }
         let jsonStr = String(text[j...])
         guard let data = jsonStr.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            SyncLog.step("Fnos.handle json parse fail")
             return
         }
         // reqid 可能是字符串也可能是数字（不同固件不同），一律归一成字符串，
@@ -191,15 +181,12 @@ final class FnosClient {
         else if let n = obj["reqid"] as? Int { reqid = String(n) }
         else if let n = obj["reqid"] as? NSNumber { reqid = n.stringValue }
         guard let rid = reqid else {
-            SyncLog.step("Fnos.handle no reqid keys=\(obj.keys.sorted().joined(separator: ","))")
             return
         }
         let reqid2 = rid
-        SyncLog.step("Fnos.handle reqid=\(reqid2) keys=\(obj.keys.sorted().joined(separator: ","))")
         var final: [String: Any]? = nil
         q.sync {
             guard var p = self.pending[reqid2] else {
-                SyncLog.step("Fnos.handle reqid=\(reqid2) no pending")
                 return
             }
             if p.stream {
@@ -219,9 +206,6 @@ final class FnosClient {
                 if fin {
                     self.pending[reqid2] = p
                     final = obj
-                    SyncLog.step("Fnos.handle reqid=\(reqid2) FINAL")
-                } else {
-                    SyncLog.step("Fnos.handle reqid=\(reqid2) not final")
                 }
             }
         }
@@ -230,19 +214,15 @@ final class FnosClient {
 
     /// 取出并移除 pending，恢复 continuation（保证只恢复一次，线程安全）
     private func finish(_ reqid: String, _ result: Result<[String: Any], Error>) {
-        SyncLog.step("Fnos.finish reqid=\(reqid)")
         var cont: CheckedContinuation<[String: Any], Error>?
         q.sync {
             guard let p = self.pending.removeValue(forKey: reqid) else {
-                SyncLog.step("Fnos.finish reqid=\(reqid) already gone")
                 return
             }
             cont = p.cont
         }
         if let cont = cont {
-            SyncLog.step("Fnos.finish reqid=\(reqid) resuming")
             cont.resume(with: result)
-            SyncLog.step("Fnos.finish reqid=\(reqid) resumed")
         }
     }
 
@@ -255,10 +235,8 @@ final class FnosClient {
 
     private func request(payload: [String: Any], reqid: String, signed: Bool,
                          stream: Bool, timeout: TimeInterval) async throws -> [String: Any] {
-        SyncLog.step("Fnos.request reqid=\(reqid) signed=\(signed) stream=\(stream)")
         return try await withCheckedThrowingContinuation { cont in
             q.sync { self.pending[reqid] = Pending(stream: stream, cont: cont) }
-            SyncLog.step("Fnos.request pending stored reqid=\(reqid)")
             let wire: String
             do {
                 let bodyData = try JSONSerialization.data(withJSONObject: payload)
@@ -276,18 +254,14 @@ final class FnosClient {
                 cont.resume(throwing: error)
                 return
             }
-            SyncLog.step("Fnos.request sending reqid=\(reqid)")
             guard let ws = self.ws else {
-                SyncLog.step("Fnos.request ws nil reqid=\(reqid)")
                 self.finish(reqid, .failure(FnErr.closed("ws nil")))
                 return
             }
             ws.send(.string(wire)) { err in
-                SyncLog.step("Fnos.request send callback reqid=\(reqid) err=\(err?.localizedDescription ?? "nil")")
                 if let err = err { self.finish(reqid, .failure(FnErr.proto(err.localizedDescription))) }
             }
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { [weak self] in
-                SyncLog.step("Fnos.request timeout reqid=\(reqid)")
                 self?.finish(reqid, .failure(FnErr.timeout))
             }
         }
@@ -316,13 +290,10 @@ final class FnosClient {
     // ---------- 协议步骤 ----------
 
     func fetchPub() async throws {
-        SyncLog.step("Fnos.fetchPub enter")
         let r = try await sendRaw(["req": "util.crypto.getRSAPub"])
-        SyncLog.step("Fnos.fetchPub got response keys=\(r.keys.sorted().joined(separator: ","))")
         guard let p = r["pub"] as? String, !p.isEmpty else { throw FnErr.proto("未取得 RSA 公钥") }
         pub = p
         si = r["si"]
-        SyncLog.step("Fnos.fetchPub done")
     }
 
     func fetchSI() async throws {
@@ -331,7 +302,6 @@ final class FnosClient {
     }
 
     func login(user: String, password: String, deviceName: String = "iOS-Player") async throws {
-        SyncLog.step("Fnos.login enter user=\(user)")
         if pub == nil { try await fetchPub() }
         let reqid = newId()
         var inner: [String: Any] = [
@@ -361,11 +331,9 @@ final class FnosClient {
             token = tok
             longToken = ltok
         }
-        SyncLog.step("Fnos.login done")
     }
 
     func authToken(_ tk: String) async throws {
-        SyncLog.step("Fnos.authToken enter")
         var req: [String: Any] = ["req": "user.authToken", "token": tk, "main": true]
         if let si = si { req["si"] = si }
         let r = try await send(req)
@@ -373,7 +341,6 @@ final class FnosClient {
             throw FnErr.proto("文件通道认证失败：" + FnosClient.errName(e))
         }
         if let u = r["uid"] as? Int { q.sync { uid = u } }
-        SyncLog.step("Fnos.authToken done")
     }
 
     // ---------- 文件 API ----------
@@ -389,12 +356,7 @@ final class FnosClient {
     func download(_ paths: [String]) async throws -> [[String: Any]] {
         let r = try await send(["req": "file.download", "files": paths])
         if let e = r["errno"] as? Int, e > 0 { throw FnErr.proto(FnosClient.errName(e)) }
-        let arr = r["download"] as? [[String: Any]] ?? []
-        // 记录第一个 uri 样例，用于确认：是绝对 URL 还是相对路径、签名参数长什么样（有没有 t=）
-        if let first = arr.first, let u = first["uri"] as? String {
-            SyncLog.step("Fnos.download first uri: \(u.prefix(120))")
-        }
-        return arr
+        return r["download"] as? [[String: Any]] ?? []
     }
 
     // ---------- 加密 ----------

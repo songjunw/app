@@ -9,14 +9,12 @@
   if (!window.__FAVS__) window.__FAVS__ = { "idxs": [] };
   if (!window.__favIdxs) window.__favIdxs = [];
   if (!window.__STAT__) window.__STAT__ = {};
-  if (!window.__SYNCTRACE__) window.__SYNCTRACE__ = { crashed: false, trace: '' };
 
   window.App = {
     getPlaylist: function () { return JSON.stringify(window.__PLAYLIST__); },
     getAccount: function () { return JSON.stringify(window.__ACCOUNT__); },
     getFavorites: function () { return JSON.stringify({ idxs: window.__favIdxs }); },
     stat: function () { return JSON.stringify(window.__STAT__); },
-    getSyncTrace: function () { return JSON.stringify(window.__SYNCTRACE__ || { crashed: false, trace: '' }); },
 
     play: function (i) { post({ m: 'play', a: [i] }); },
     toggle: function () { post({ m: 'toggle' }); },

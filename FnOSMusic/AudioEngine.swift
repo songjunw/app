@@ -15,8 +15,6 @@ struct Track {
 protocol AudioEngineDelegate: AnyObject {
     func engineStateChanged()
     func engineProgress(posMs: Int, durMs: Int, bufPct: Int)
-    /// 测试期运行日志（播放 URL / status / 错误 / 音频会话），推给 UI 实时展示
-    func engineLog(_ line: String)
     /// 播放失败时给用户的可见提示（toast），避免"点了没反应也没提示"
     func engineError(_ msg: String)
 }
@@ -28,12 +26,6 @@ protocol AudioEngineDelegate: AnyObject {
 final class AudioEngine: NSObject {
 
     weak var delegate: AudioEngineDelegate?
-
-    /// 测试期运行日志：落盘 SyncLog + 实时推给 UI
-    private func log(_ line: String) {
-        SyncLog.step(line)
-        delegate?.engineLog(line)
-    }
 
     private var player: AVPlayer?
     private var playerItem: AVPlayerItem?
@@ -156,9 +148,6 @@ final class AudioEngine: NSObject {
         removeKVO()
 
         let playURL = resolveURL(t.url)
-        log("▶ 播放 #\(t.idx) \(t.title)")
-        log("  url=\(playURL.absoluteString)")
-        probeURL(playURL)   // 用 URLSession 探测直链可达性/状态码（区分 URL 错 vs 鉴权/格式）
 
         // 给播放请求带 Cookie（fnos-token）与移动端 UA。若 fnOS 直链需要会话鉴权，
         // AVPlayer 默认不带 Cookie 就会 401/403 → 无声。这里显式注入。
@@ -196,38 +185,7 @@ final class AudioEngine: NSObject {
            let u = URL(string: enc), u.scheme != nil, u.host != nil {
             return u
         }
-        log("  ✗ URL 解析失败: \(raw)")
         return URL(fileURLWithPath: "")
-    }
-
-    /// 用独立的 URLSession 探测直链：记录 HTTP 状态码 + Content-Type + 是否支持 Range。
-    /// 用于区分「URL 不可达/404」vs「URL 可达但 AVPlayer 播不出（鉴权/格式/Range 缺失）」。
-    /// 不带 Cookie（与 AVPlayer 一致），这样能暴露"直链需要 Cookie 鉴权"的问题。
-    private func probeURL(_ url: URL) {
-        var req = URLRequest(url: url)
-        req.httpMethod = "HEAD"
-        req.timeoutInterval = 12
-        req.setValue("bytes=0-0", forHTTPHeaderField: "Range")   // 探测服务器是否支持 Range（AVPlayer 强依赖）
-        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
-        let task = URLSession.shared.dataTask(with: req) { [weak self] data, resp, err in
-            if let e = err {
-                self?.log("  ✗ 探测直链失败: \(e.localizedDescription)")
-                return
-            }
-            if let h = resp as? HTTPURLResponse {
-                let ct = h.value(forHTTPHeaderField: "Content-Type") ?? "?"
-                let cr = h.value(forHTTPHeaderField: "Content-Range") ?? "?"
-                let len = h.value(forHTTPHeaderField: "Content-Length") ?? "?"
-                self?.log("  探测直链 HTTP \(h.statusCode) type=\(ct) range=\(cr) len=\(len)")
-                if h.statusCode == 401 || h.statusCode == 403 {
-                    self?.log("  ⚠️ 直链需要鉴权(401/403)——AVPlayer 不带 Cookie，这极可能是无声根因")
-                }
-                if h.statusCode != 200 && h.statusCode != 206 {
-                    self?.log("  ⚠️ 直链返回非 200/206，AVPlayer 无法播放")
-                }
-            }
-        }
-        task.resume()
     }
 
     func play() {
@@ -236,10 +194,7 @@ final class AudioEngine: NSObject {
         // 每次起播都重新激活音频会话。只在 App 启动时激活一次是不够的：
         // 来电、其他 App 抢占、系统回收都会让会话失效，之后 play() 会"成功但没声音"。
         activateAudioSession()
-        guard player.currentItem != nil else {
-            log("  ✗ 没有可播放的音频项（曲库为空或索引越界）")
-            return
-        }
+        guard player.currentItem != nil else { return }
         // playImmediately 会无视"缓冲足够才播"的等待逻辑，直接起播
         player.playImmediately(atRate: 1.0)
         if player.rate == 0 { player.play() }   // 兜底：个别情况下 playImmediately 被忽略
@@ -276,7 +231,6 @@ final class AudioEngine: NSObject {
             try s.setActive(true)
             return true
         } catch {
-            log("  ✗ 音频会话激活失败: \(error.localizedDescription)")
             return false
         }
     }
@@ -289,11 +243,9 @@ final class AudioEngine: NSObject {
                   let raw = n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
                   let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
             if type == .began {
-                self.log("  ⏸ 系统中断（来电/其他 App 抢占）")
                 self.isPlaying = false
                 self.notifyState()
             } else if self.intentToPlay {
-                self.log("  ▶ 中断结束，恢复播放")
                 self.play()
             }
         }
@@ -320,20 +272,17 @@ final class AudioEngine: NSObject {
            player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
            !bufferGraceUsed {
             bufferGraceUsed = true
-            log("  ⏳ 已就绪但仍在缓冲，再等一轮")
             armWatchdog(delay: 10)
             return
         }
 
         if stallRetries >= 2 {
             errorMsg = "播放没起来，请再点一次或重新同步曲库"
-            log("  ✗ 重建播放项重试 2 次仍未出声，放弃")
             notifyState()
             delegate?.engineError(errorMsg)
             return
         }
         stallRetries += 1
-        log("  ⚠️ 未出声（item status=\(st?.rawValue ?? -1) rate=\(player.rate)），重建播放项重试第 \(stallRetries) 次")
         activateAudioSession()
         openCurrent(autoplay: true, isRetry: true)
     }
@@ -401,37 +350,27 @@ final class AudioEngine: NSObject {
             switch st {
             case .playing:
                 isPlaying = true; isLoading = false
-                log("  ▶ 进入播放状态 playing")
             case .waitingToPlayAtSpecifiedRate:
                 isLoading = true; isPlaying = false
-                log("  ⏳ 缓冲中 waitingToPlayAtSpecifiedRate")
             default:
                 isPlaying = false; isLoading = false
-                log("  ⏸ 播放暂停/停止 timeControlStatus=\(st.rawValue)")
             }
             updateNowPlayingPlaybackState()
             notifyState()
         } else if keyPath == "status" {
             if let item = playerItem, item.status == .failed {
                 errorMsg = item.error?.localizedDescription ?? "播放失败"
-                let ns = item.error as NSError?
-                log("  ✗ AVPlayerItem 失败 code=\(ns?.code ?? 0) domain=\(ns?.domain ?? "?")")
                 notifyState()
                 delegate?.engineError("播放失败：\(errorMsg)")
             } else if let item = playerItem, item.status == .readyToPlay {
                 isLoading = false
-                let d = item.duration.seconds
-                log("  ✓ AVPlayerItem 就绪" + (d.isFinite ? " dur=\(Int(d))s" : ""))
                 // 起播请求可能早于"就绪"被系统吞掉 → 这里补发一次，这是"没声音也没走秒"的常见成因
                 if intentToPlay, let p = player, p.rate == 0 {
-                    log("  ↻ 已就绪但未起播，补发 playImmediately")
                     activateAudioSession()
                     p.playImmediately(atRate: 1.0)
                 }
                 updateNowPlaying()
                 notifyState()
-            } else if let item = playerItem, item.status == .unknown {
-                log("  … AVPlayerItem 状态未知（仍在加载）")
             }
         }
     }
