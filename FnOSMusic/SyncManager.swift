@@ -29,8 +29,6 @@ enum SyncManager {
         var ext = ""
         var size: Int64 = 0
         var uri = ""
-        var lrcPath: String?
-        var lrc = ""
     }
 
     /// 统一打点：既落盘（崩溃后可追溯），也推给 UI（用户实时可见）
@@ -88,8 +86,6 @@ enum SyncManager {
             guard !root.isEmpty else { throw SyncErr("音乐目录为空，请填形如 vol1/1000/音乐") }
 
             var list: [Entry] = []
-            var lrcByKey: [String: String] = [:]
-            var lrcByPath: [String: Entry] = [:]
             var dirs = 0
             var stack: [String] = [root]
             var lastTick = Date()
@@ -118,13 +114,6 @@ enum SyncManager {
                     }
                     guard let dot = name.lastIndex(of: ".") else { continue }
                     let ext = String(name[name.index(after: dot)...]).lowercased()
-                    if ext == "lrc" {
-                        let base = String(name[..<dot])
-                        lrcByKey[lrcKey(album: album, base: base)] = dir + "/" + name
-                        let nb = normBase(base)
-                        if nb != base { lrcByKey[lrcKey(album: album, base: nb)] = dir + "/" + name }
-                        continue
-                    }
                     guard audioExts.contains(ext) else { continue }
                     let e = Entry()
                     e.path = dir + "/" + name
@@ -141,20 +130,6 @@ enum SyncManager {
             }
             tick("⑥ 扫描结束：\(dirs) 个目录，\(list.count) 首音频", onProgress)
 
-            // 把扫描到的 .lrc 关联到对应音频
-            for e in list {
-                guard let dot = e.name.lastIndex(of: ".") else { continue }
-                let base = String(e.name[..<dot])
-                var lp = lrcByKey[lrcKey(album: e.album, base: base)]
-                if lp == nil {
-                    let nb = normBase(base)
-                    if nb != base { lp = lrcByKey[lrcKey(album: e.album, base: nb)] }
-                }
-                if let lp = lp {
-                    e.lrcPath = lp
-                    lrcByPath[lp] = e
-                }
-            }
             guard !list.isEmpty else {
                 throw SyncErr("目录 \(root) 下没找到音频文件，请检查路径")
             }
@@ -185,33 +160,13 @@ enum SyncManager {
                 throw SyncErr("一首都没取到播放链接（可能是权限不足或签名失败）")
             }
 
-            // 批量取同名 .lrc 歌词直链
-            if !lrcByPath.isEmpty {
-                let lrcPaths = Array(lrcByPath.keys)
-                var lgot = 0
-                for i in stride(from: 0, to: lrcPaths.count, by: batch) {
-                    let end = min(i + batch, lrcPaths.count)
-                    let slice = Array(lrcPaths[i..<end])
-                    let uris = try await f.download(slice)
-                    for k in 0..<slice.count {
-                        if k < uris.count,
-                           let u = uris[k]["uri"] as? String, !u.isEmpty,
-                           let e = lrcByPath[slice[k]] {
-                            e.lrc = u
-                            lgot += 1
-                        }
-                    }
-                }
-                tick("⑧ 已关联 \(lgot) 个歌词文件", onProgress)
-            }
-
             // 生成清单并写入
             var arr: [[String: Any]] = []
             for e in list {
                 guard !e.uri.isEmpty else { continue }
                 arr.append([
                     "name": e.name, "album": e.album, "ext": e.ext,
-                    "size": e.size, "uri": e.uri, "lrc": e.lrc,
+                    "size": e.size, "uri": e.uri,
                 ])
             }
             let iso = isoNow()
@@ -292,17 +247,6 @@ enum SyncManager {
         let h = String(origin[p.upperBound...])
         if let s = h.firstIndex(of: "/") { return String(h[..<s]) }
         return h
-    }
-
-    private static func lrcKey(album: String, base: String) -> String {
-        return (album.isEmpty ? "" : album) + "/" + (base.isEmpty ? "" : base)
-    }
-
-    /// 去掉文件名开头的音轨号："01. 晴天" / "01 - 晴天" -> "晴天"
-    private static func normBase(_ base: String) -> String {
-        var s = base.trimmingCharacters(in: .whitespaces)
-        s = s.replacingOccurrences(of: #"^\s*\d{1,3}[\.\、\s\-_]+"#, with: "", options: .regularExpression)
-        return s.trimmingCharacters(in: .whitespaces)
     }
 
     /// 去掉首尾斜杠，路径形如 vol1/1000/音乐

@@ -10,7 +10,6 @@ struct Track {
     let url: String
     let ext: String
     let size: Int
-    let lrc: String   // 同名 .lrc 的签名直链（没有则为空串）
 }
 
 protocol AudioEngineDelegate: AnyObject {
@@ -18,6 +17,8 @@ protocol AudioEngineDelegate: AnyObject {
     func engineProgress(posMs: Int, durMs: Int, bufPct: Int)
     /// 测试期运行日志（播放 URL / status / 错误 / 音频会话），推给 UI 实时展示
     func engineLog(_ line: String)
+    /// 播放失败时给用户的可见提示（toast），避免"点了没反应也没提示"
+    func engineError(_ msg: String)
 }
 
 /// 原生播放引擎：
@@ -40,6 +41,15 @@ final class AudioEngine: NSObject {
     private var endObserver: NSObjectProtocol?
     private var kvoItem: AVPlayerItem?
     private var timeObserved = false
+    private var interruptionObserver: NSObjectProtocol?
+
+    /// 是否有"要播放"的意图。用于两件事：
+    /// 1) 音频项就绪时若播放器还停着，说明起播请求被吞了 → 补发一次
+    /// 2) 看门狗据此判断"该出声却没出声"
+    private var intentToPlay = false
+    private var watchdog: DispatchWorkItem?
+    private var stallRetries = 0
+    private var bufferGraceUsed = false
 
     var tracks: [Track] = []
     private var queue: [Track] = []
@@ -50,19 +60,25 @@ final class AudioEngine: NSObject {
     private(set) var durationMs: Int = 0
     private(set) var positionMs: Int = 0
     private(set) var errorMsg: String = ""
-    private var volume: Float = 1.0
 
     override init() {
         super.init()
-        player = AVPlayer()
-        player?.volume = volume
+        let p = AVPlayer()
+        // 远程直链（FN Connect 中继）下，"等缓冲足够再播"的启发式有时永远不满足，
+        // 表现就是点了歌不出声、进度也不走秒。关掉它，改用 playImmediately 立即起播；
+        // 真卡死交给看门狗重建播放项重试。
+        p.automaticallyWaitsToMinimizeStalling = false
+        player = p
         addTimeObserver()
         setupRemoteCommands()
+        setupInterruptionObserver()
     }
 
     deinit {
         if let t = timeObserverToken { player?.removeTimeObserver(t) }
         if let o = endObserver { NotificationCenter.default.removeObserver(o) }
+        if let o = interruptionObserver { NotificationCenter.default.removeObserver(o) }
+        watchdog?.cancel()
         removeKVO()
     }
 
@@ -119,11 +135,6 @@ final class AudioEngine: NSObject {
 
     func setMode(_ m: Int) { mode = m; notifyState() }
 
-    func setVolume(_ v: Float) {
-        volume = max(0, min(1, v))
-        player?.volume = volume
-    }
-
     var currentTrack: Track? {
         guard qpos >= 0, qpos < queue.count else { return nil }
         return queue[qpos]
@@ -131,11 +142,16 @@ final class AudioEngine: NSObject {
 
     // MARK: - 播放
 
-    private func openCurrent(autoplay: Bool) {
+    private func openCurrent(autoplay: Bool, isRetry: Bool = false) {
         guard qpos >= 0, qpos < queue.count else { return }
         let t = queue[qpos]
         isLoading = true
         errorMsg = ""
+        intentToPlay = autoplay
+        if !isRetry {
+            stallRetries = 0
+            bufferGraceUsed = false
+        }
         if let o = endObserver { NotificationCenter.default.removeObserver(o); endObserver = nil }
         removeKVO()
 
@@ -161,7 +177,10 @@ final class AudioEngine: NSObject {
         setupEndObserver(for: item)
         updateNowPlaying()
         notifyState()
-        if autoplay { play() }
+        if autoplay {
+            play()
+            armWatchdog()
+        }
     }
 
     /// 健壮地解析播放地址：
@@ -213,11 +232,23 @@ final class AudioEngine: NSObject {
 
     func play() {
         guard let player = player else { return }
-        player.play()
+        intentToPlay = true
+        // 每次起播都重新激活音频会话。只在 App 启动时激活一次是不够的：
+        // 来电、其他 App 抢占、系统回收都会让会话失效，之后 play() 会"成功但没声音"。
+        activateAudioSession()
+        guard player.currentItem != nil else {
+            log("  ✗ 没有可播放的音频项（曲库为空或索引越界）")
+            return
+        }
+        // playImmediately 会无视"缓冲足够才播"的等待逻辑，直接起播
+        player.playImmediately(atRate: 1.0)
+        if player.rate == 0 { player.play() }   // 兜底：个别情况下 playImmediately 被忽略
         notifyState()
     }
 
     func pause() {
+        intentToPlay = false
+        watchdog?.cancel()
         player?.pause()
         isPlaying = false
         isLoading = false
@@ -228,10 +259,83 @@ final class AudioEngine: NSObject {
     private func onEnded() {
         if mode == 1 {
             player?.seek(to: .zero)
-            player?.play()
+            play()
             return
         }
         next(userTriggered: false)
+    }
+
+    // MARK: - 播放稳定性
+
+    /// 激活音频会话。失败会让 AVPlayer「静默失败」——点了没声音也不走秒，所以每次起播都调用。
+    @discardableResult
+    private func activateAudioSession() -> Bool {
+        let s = AVAudioSession.sharedInstance()
+        do {
+            try s.setCategory(.playback, mode: .default, options: [.allowAirPlay, .allowBluetoothHFP])
+            try s.setActive(true)
+            return true
+        } catch {
+            log("  ✗ 音频会话激活失败: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// 来电 / 其他 App 抢占结束后，若本来是要播放的，自动把会话抢回来并续播
+    private func setupInterruptionObserver() {
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] n in
+            guard let self = self,
+                  let raw = n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+            if type == .began {
+                self.log("  ⏸ 系统中断（来电/其他 App 抢占）")
+                self.isPlaying = false
+                self.notifyState()
+            } else if self.intentToPlay {
+                self.log("  ▶ 中断结束，恢复播放")
+                self.play()
+            }
+        }
+    }
+
+    /// 起播看门狗：delay 秒后仍没出声也没走秒 → 重建播放项重试（最多 2 次），
+    /// 避免出现"点了歌没声音、也没走秒、还不报错"这种卡死状态。
+    private func armWatchdog(delay: Double = 6) {
+        watchdog?.cancel()
+        let w = DispatchWorkItem { [weak self] in self?.checkStall() }
+        watchdog = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: w)
+    }
+
+    private func checkStall() {
+        guard intentToPlay, let player = player else { return }
+        if player.rate > 0 || player.timeControlStatus == .playing { return }   // 已正常播放
+        if positionMs > 300 { return }                                          // 已在走秒
+
+        let st = player.currentItem?.status
+
+        // 已就绪、系统正在等缓冲：这是"真在缓冲"，给一轮宽限，不重建播放项
+        if st == .readyToPlay,
+           player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
+           !bufferGraceUsed {
+            bufferGraceUsed = true
+            log("  ⏳ 已就绪但仍在缓冲，再等一轮")
+            armWatchdog(delay: 10)
+            return
+        }
+
+        if stallRetries >= 2 {
+            errorMsg = "播放没起来，请再点一次或重新同步曲库"
+            log("  ✗ 重建播放项重试 2 次仍未出声，放弃")
+            notifyState()
+            delegate?.engineError(errorMsg)
+            return
+        }
+        stallRetries += 1
+        log("  ⚠️ 未出声（item status=\(st?.rawValue ?? -1) rate=\(player.rate)），重建播放项重试第 \(stallRetries) 次")
+        activateAudioSession()
+        openCurrent(autoplay: true, isRetry: true)
     }
 
     // MARK: - 观察者
@@ -310,12 +414,22 @@ final class AudioEngine: NSObject {
         } else if keyPath == "status" {
             if let item = playerItem, item.status == .failed {
                 errorMsg = item.error?.localizedDescription ?? "播放失败"
-                let code = (item.error as NSError?)?.code ?? 0
-                log("  ✗ AVPlayerItem 失败 code=\(code): \(errorMsg)")
+                let ns = item.error as NSError?
+                log("  ✗ AVPlayerItem 失败 code=\(ns?.code ?? 0) domain=\(ns?.domain ?? "?")")
                 notifyState()
+                delegate?.engineError("播放失败：\(errorMsg)")
             } else if let item = playerItem, item.status == .readyToPlay {
                 isLoading = false
-                log("  ✓ AVPlayerItem 就绪")
+                let d = item.duration.seconds
+                log("  ✓ AVPlayerItem 就绪" + (d.isFinite ? " dur=\(Int(d))s" : ""))
+                // 起播请求可能早于"就绪"被系统吞掉 → 这里补发一次，这是"没声音也没走秒"的常见成因
+                if intentToPlay, let p = player, p.rate == 0 {
+                    log("  ↻ 已就绪但未起播，补发 playImmediately")
+                    activateAudioSession()
+                    p.playImmediately(atRate: 1.0)
+                }
+                updateNowPlaying()
+                notifyState()
             } else if let item = playerItem, item.status == .unknown {
                 log("  … AVPlayerItem 状态未知（仍在加载）")
             }

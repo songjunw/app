@@ -107,9 +107,8 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
         if !store.tracks.isEmpty {
             tracks = store.tracks.map { st in
                 let full = st.uri.hasPrefix("http") ? st.uri : (origin + st.uri)
-                let lrc = st.lrc.isEmpty ? "" : (st.lrc.hasPrefix("http") ? st.lrc : (origin + st.lrc))
                 return Track(idx: st.idx, title: st.title.isEmpty ? st.name : st.title,
-                             album: st.album, url: full, ext: st.ext, size: Int(st.size), lrc: lrc)
+                             album: st.album, url: full, ext: st.ext, size: Int(st.size))
             }
         } else {
             tracks = sampleTracks()
@@ -124,7 +123,7 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
         ]
         let names = ["示例曲目 1", "示例曲目 2", "示例曲目 3"]
         return urls.enumerated().map { i, u in
-            Track(idx: i, title: names[i], album: "测试歌单", url: u, ext: "mp3", size: 0, lrc: "")
+            Track(idx: i, title: names[i], album: "测试歌单", url: u, ext: "mp3", size: 0)
         }
     }
 
@@ -149,7 +148,7 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
     private func samplePlaylistJSON() -> String {
         let arr = sampleTracks().map { t in
             ["name": t.title, "title": t.title, "album": t.album,
-             "ext": t.ext, "size": t.size, "uri": t.url, "lrc": ""] as [String: Any]
+             "ext": t.ext, "size": t.size, "uri": t.url] as [String: Any]
         }
         return jsonString(["origin": "", "generatedAt": "", "tracks": arr])
     }
@@ -232,8 +231,6 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
             if let ms = args.first as? Int { engine.seek(ms: ms) }
         case "setMode":
             if let m = args.first as? Int { engine.setMode(m) }
-        case "setVolume":
-            if let v = args.first as? Double { engine.setVolume(Float(v)) }
         case "setQueue":
             if let idxJson = args.first as? String,
                let data = idxJson.data(using: .utf8),
@@ -336,8 +333,7 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
                 if let meta = meta {
                     let d: [String: Any] = [
                         "artist": meta.artist, "title": meta.title,
-                        "cover": meta.cover ?? "", "lyrics": meta.lyrics ?? "",
-                        "timed": meta.timed ?? [],
+                        "cover": meta.cover ?? "",
                     ]
                     self.eval("window.onMeta && window.onMeta(\(idx), \(self.jsonString(d)))")
                 } else {
@@ -364,6 +360,15 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
         DispatchQueue.main.async {
             self.webView.evaluateJavaScript(
                 "window.onNativeLog && window.onNativeLog(\(self.jsStr(line)))",
+                completionHandler: nil)
+        }
+    }
+
+    /// 播放失败提示 → JS 的 onNativeError（toast 可见）
+    func engineError(_ msg: String) {
+        DispatchQueue.main.async {
+            self.webView.evaluateJavaScript(
+                "window.onNativeError && window.onNativeError({\"msg\":\(self.jsStr(msg))})",
                 completionHandler: nil)
         }
     }

@@ -24,7 +24,6 @@
     prev: function () { post({ m: 'prev' }); },
     seek: function (ms) { post({ m: 'seek', a: [ms] }); },
     setMode: function (m) { post({ m: 'setMode', a: [m] }); },
-    setVolume: function (v) { post({ m: 'setVolume', a: [v] }); },
     setQueue: function (idxJson, startPos) { post({ m: 'setQueue', a: [idxJson, startPos || 0] }); },
     requestMeta: function (idx) { post({ m: 'requestMeta', a: [idx] }); },
     toast: function (msg) { post({ m: 'toast', a: [msg] }); },

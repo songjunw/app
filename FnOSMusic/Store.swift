@@ -9,7 +9,6 @@ struct StoredTrack {
     var ext: String
     var size: Int64
     var uri: String       // /download/... 带签名的相对路径（原生层拼 origin 后由 AVPlayer 播放）
-    var lrc: String       // 同名 .lrc 歌词文件的签名直链（没有则为空串）
 }
 
 /// 清单与凭据存储（复刻安卓 Store）。
@@ -165,8 +164,7 @@ final class Store {
                           album: t["album"] as? String ?? "",
                           ext: t["ext"] as? String ?? "",
                           size: (t["size"] as? NSNumber)?.int64Value ?? 0,
-                          uri: t["uri"] as? String ?? "",
-                          lrc: t["lrc"] as? String ?? "")
+                          uri: t["uri"] as? String ?? "")
             if let dot = k.name.lastIndex(of: ".") {
                 k.title = String(k.name[..<dot])
             } else {
@@ -198,10 +196,10 @@ final class Store {
             for t in _tracks {
                 arr.append([
                     "i": t.idx, "n": t.title, "a": t.album,
-                    "s": t.size, "e": t.ext, "u": t.uri, "l": t.lrc,
+                    "s": t.size, "e": t.ext, "u": t.uri,
                     // 兼容长名
                     "name": t.name, "title": t.title, "album": t.album,
-                    "ext": t.ext, "size": t.size, "uri": t.uri, "lrc": t.lrc,
+                    "ext": t.ext, "size": t.size, "uri": t.uri,
                 ])
             }
             let root: [String: Any] = [

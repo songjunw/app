@@ -139,7 +139,7 @@ body.paused .eq i{animation-play-state:paused}
   background:radial-gradient(120% 70% at 50% 8%, rgba(109,140,255,.22), transparent 60%);
   transition:background .5s ease;
 }
-#full .ftext,#full .artwrap,#full .seekwrap,#full .fctrl,#full .fbot{position:relative;z-index:1}
+#full .ftext,#full .artwrap,#full .seekwrap,#full .fctrl{position:relative;z-index:1}
 .artwrap{flex:1;display:flex;align-items:center;justify-content:center;min-height:0;padding:8px 0;position:relative}
 .art{
   width:min(74vw,300px);aspect-ratio:1;border-radius:50%;position:relative;
@@ -185,7 +185,7 @@ body.paused .eq i{animation-play-state:paused}
 .track.drag .knob{transform:translateX(-50%) scale(1.45)}
 .times{display:flex;justify-content:space-between;font-size:11.5px;color:var(--txt3);font-variant-numeric:tabular-nums;margin-top:2px}
 
-.fctrl{flex:none;display:flex;align-items:center;justify-content:space-between;padding:12px 2px 6px}
+.fctrl{flex:none;display:flex;align-items:center;justify-content:space-between;padding:14px 2px 14px}
 .fbtn{
   width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;
   color:var(--txt2);background:transparent;position:relative;
@@ -201,11 +201,6 @@ body.paused .eq i{animation-play-state:paused}
 .fbtn.act{color:var(--acc)}
 .fbtn .badge{position:absolute;bottom:6px;font-size:9px;font-weight:700}
 
-.fbot{flex:none;display:flex;align-items:center;gap:12px;padding:6px 0 18px;color:var(--txt3);font-size:12px}
-.fbot .vol{flex:1;height:22px;display:flex;align-items:center;position:relative}
-.fbot .vol .rail{height:3px;width:100%;background:#1e2431;border-radius:3px;position:relative;overflow:hidden}
-.fbot .vol .fill{position:absolute;left:0;top:0;bottom:0;background:var(--txt2);width:80%}
-
 /* ---------- 收藏 ---------- */
 .favbtn{width:40px;height:40px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--txt2);font-size:20px}
 .favbtn:active{background:var(--panel2);border-radius:50%}
@@ -214,7 +209,7 @@ body.paused .eq i{animation-play-state:paused}
 .hfav.on{color:var(--err)}
 .hfav:active{background:var(--panel2)}
 
-/* ---------- 封面 / 歌词 ---------- */
+/* ---------- 封面 ---------- */
 .artwrap{position:relative}
 #artimg{
   position:absolute;inset:0;border-radius:50%;
@@ -224,29 +219,6 @@ body.paused .eq i{animation-play-state:paused}
 }
 .art.hascover #artimg{opacity:1}
 .art.hascover .sheen,.art.hascover .hole{opacity:0}
-
-#lyr{
-  position:absolute;inset:0;z-index:6;
-  background:rgba(11,13,18,.82);
-  -webkit-backdrop-filter:blur(18px) saturate(1.3);backdrop-filter:blur(18px) saturate(1.3);
-  display:flex;flex-direction:column;
-  opacity:0;pointer-events:none;transform:translateY(8px);
-  transition:opacity .26s,transform .26s;
-}
-#lyr.show{opacity:1;pointer-events:auto;transform:none}
-#lyrBar{flex:none;display:flex;align-items:center;padding:6px 14px 2px}
-#lyrBar .t{flex:1;font-size:13px;color:var(--txt3)}
-#lyrBar .x{
-  width:34px;height:34px;border-radius:50%;flex:none;
-  display:flex;align-items:center;justify-content:center;
-  color:var(--txt2);font-size:18px;background:var(--panel2);
-}
-#lyrBar .x:active{background:#1e2431}
-#lyrScr{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:8px 22px 70px;text-align:center}
-#lyrScr .ln{font-size:15px;line-height:1.9;color:var(--txt3);padding:3px 0;transition:color .2s,font-size .2s}
-#lyrScr .ln.cur{color:var(--txt);font-size:17px;font-weight:600}
-#lyrScr .ln.info{color:var(--txt3);font-size:12px;opacity:.65}
-#lyrEmp{color:var(--txt3);font-size:13px;padding:30px 0}
 
 /* ---------- 抽屉 ---------- */
 #sheet{position:fixed;inset:0;z-index:60;display:none}
@@ -348,10 +320,6 @@ body.paused .eq i{animation-play-state:paused}
   </div>
   <div class="artwrap">
     <div class="art" id="art"><div id="artimg"></div><div class="sheen"></div><div class="hole"></div></div>
-    <div id="lyr">
-      <div id="lyrBar"><div class="t">歌词</div><div class="x" id="lyrX">✕</div></div>
-      <div id="lyrScr"></div>
-    </div>
   </div>
   <div class="seekwrap">
     <div class="track" id="track">
@@ -366,11 +334,6 @@ body.paused .eq i{animation-play-state:paused}
     <div class="fbtn big" id="fplay"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
     <div class="fbtn" id="fnext"><svg viewBox="0 0 24 24"><path d="M15.5 6H18v12h-2.5zM4 6l9 6-9 6z"/></svg></div>
     <div class="fbtn" id="flist"><svg viewBox="0 0 24 24"><path d="M3 5h13v2H3zm0 6h13v2H3zm0 6h13v2H3zm16-9l3 3-3 3z"/></svg></div>
-  </div>
-  <div class="fbot">
-    <span>🔈</span>
-    <div class="vol" id="vol"><div class="rail"><div class="fill" id="volf"></div></div></div>
-    <span id="volt">80%</span>
   </div>
 </div>
 
@@ -746,26 +709,6 @@ window.onAndroidBack = function(){
   document.addEventListener('mouseup', up);
 })();
 
-// ---------- 音量 ----------
-(function(){
-  var v = $('vol'), val = 0.8;
-  function set(e){
-    var r = v.getBoundingClientRect();
-    var x = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
-    val = Math.max(0, Math.min(1, x / r.width));
-    $('volf').style.width = (val*100)+'%';
-    $('volt').textContent = Math.round(val*100)+'%';
-    if (HAS_APP) App.setVolume(val);
-  }
-  var on = false;
-  v.addEventListener('touchstart', function(e){ on = true; set(e); e.preventDefault(); }, {passive:false});
-  v.addEventListener('touchmove', function(e){ if(on) { set(e); e.preventDefault(); } }, {passive:false});
-  v.addEventListener('touchend', function(){ on = false; });
-  v.addEventListener('mousedown', function(e){ on = true; set(e); });
-  document.addEventListener('mousemove', function(e){ if(on) set(e); });
-  document.addEventListener('mouseup', function(){ on = false; });
-})();
-
 // ---------- 搜索 ----------
 $('q').addEventListener('input', function(){
   curQuery = this.value;
@@ -990,9 +933,7 @@ window.onNativeState = function(s){
   }
 };
 
-// ---------- 封面 / 歌词 ----------
-
-var LYR_ACT = -1;
+// ---------- 封面 ----------
 
 // 封面取色氛围光晕：读封面图主色，映射到全屏页顶部柔和渐变
 function paintAura(src){
@@ -1020,7 +961,6 @@ function paintAura(src){
 }
 
 function resetMeta() {
-  LYR_ACT = -1;
   window.__artist = '';
   window.__title = '';
   var tip = $('metatip'); if (tip) { tip.textContent = ''; tip.classList.remove('on'); }
@@ -1031,11 +971,6 @@ function resetMeta() {
   $('mcover').textContent = '♪';
   var au = $('fullAura');
   if (au) au.style.background = 'radial-gradient(120% 70% at 50% 8%, rgba(109,140,255,.22), transparent 60%)';
-  $('lyr').classList.remove('show');
-  $('lyrScr').innerHTML = '';
-  window.__lyrHas = false;
-  window.__lyrTimed = [];
-  window.__lyrNodes = [];
 }
 
 // 副标题：优先显示歌手名（来自 ID3），无则回退到音乐目录路径
@@ -1048,12 +983,12 @@ function paintSub() {
   $('fa').textContent = sub;
 }
 
-// 内嵌封面 / 歌词缺失，正在通过在线 API 匹配（网络有 ~1s 延迟，给个提示避免误以为没图）
+// 封面缺失，正在通过在线 API 匹配（网络有 ~1s 延迟，给个提示避免误以为没图）
 window.onMetaLoading = function(idx) {
   if (idx !== curTrack) return;
   var tip = $('metatip');
   if (!tip) return;
-  tip.textContent = '正在匹配在线歌词 / 封面…';
+  tip.textContent = '正在匹配在线封面…';
   tip.classList.add('on');
 };
 
@@ -1076,85 +1011,7 @@ window.onMeta = function(idx, meta) {
   } else {
     $('fullAura').style.background = 'radial-gradient(120% 70% at 50% 8%, rgba(109,140,255,.22), transparent 60%)';
   }
-  // 歌词
-  window.__lyrHas = !!(meta && meta.lyrics && meta.lyrics.trim().length > 0);
-  buildLyrics(meta);
 };
-
-function buildLyrics(meta) {
-  var scr = $('lyrScr');
-  scr.innerHTML = '';
-  window.__lyrTimed = [];
-  window.__lyrNodes = [];
-  LYR_ACT = -1;
-  var timed = (meta && meta.timed) || [];
-  if (timed.length) {
-    timed.forEach(function(ln){
-      var d = document.createElement('div');
-      d.className = 'ln' + (ln.t < 0 ? ' info' : '');
-      d.textContent = ln.x;
-      scr.appendChild(d);
-      window.__lyrNodes.push(d);
-      window.__lyrTimed.push({ t: ln.t, x: ln.x });
-    });
-  } else if (meta && meta.lyrics) {
-    meta.lyrics.split('\n').forEach(function(line){
-      var d = document.createElement('div');
-      d.className = 'ln';
-      d.textContent = line.replace('\r', '');
-      scr.appendChild(d);
-      window.__lyrNodes.push(d);
-    });
-  } else {
-    var e = document.createElement('div');
-    e.id = 'lyrEmp';
-    e.textContent = '这首歌没有歌词';
-    scr.appendChild(e);
-  }
-}
-
-function toggleLyrics() {
-  var lyr = $('lyr');
-  if (lyr.classList.contains('show')) { lyr.classList.remove('show'); return; }
-  // 如果 meta 还没拉过，或当前曲目换了但 meta 仍是空的，再试一次
-  if (!window.__lyrHas && HAS_APP && curTrack >= 0) {
-    if (window.__metaRequestedFor !== curTrack || !window.__meta) {
-      App.requestMeta(curTrack);
-      window.__metaRequestedFor = curTrack;
-      toast('正在读取歌词…');
-      return;
-    }
-  }
-  if (!window.__lyrHas) { toast('这首歌没有歌词'); return; }
-  lyr.classList.add('show');
-  syncLyrics(posMs);
-}
-
-function syncLyrics(pos) {
-  if (!$('lyr').classList.contains('show')) return;
-  var arr = window.__lyrTimed;
-  if (!arr || !arr.length) return;
-  // 找到当前时间之前最新的一行带时间戳的歌词
-  var act = -1;
-  for (var i = 0; i < arr.length; i++) {
-    if (arr[i].t >= 0 && arr[i].t <= pos) act = i;
-    else if (arr[i].t > pos) break;
-  }
-  if (act < 0) act = 0;
-  if (act === LYR_ACT) return;
-  LYR_ACT = act;
-  var nodes = window.__lyrNodes;
-  for (var k = 0; k < nodes.length; k++) {
-    nodes[k].className = 'ln' + (k === act ? ' cur' : '') + ((arr[k].t < 0) ? ' info' : '');
-  }
-  if (nodes[act]) {
-    try { nodes[act].scrollIntoView({ block: 'center', behavior: 'smooth' }); }
-    catch (e) { nodes[act].scrollIntoView(); }
-  }
-}
-
-$('art').addEventListener('click', toggleLyrics);
-$('lyrX').addEventListener('click', function(){ $('lyr').classList.remove('show'); });
 
 window.onNativeProgress = function(pos, dur, buf){
   posMs = pos; if (dur) durMs = dur; bufPct = buf;
@@ -1166,7 +1023,6 @@ window.onNativeProgress = function(pos, dur, buf){
   $('mprog').style.width = (p*100)+'%';
   $('tcur').textContent = fmtTime(pos);
   $('tdur').textContent = fmtTime(durMs);
-  syncLyrics(pos);
 };
 
 window.onNativeError = function(e){
