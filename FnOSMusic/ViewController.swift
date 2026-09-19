@@ -28,17 +28,33 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
             cfg.mediaTypesRequiringUserActionForPlayback = []
         }
 
+        // 页面底色（与 player.html 的 --bg 一致）。window / view / webView 统一用这个颜色，
+        // 万一还有缝隙也不会露出纯黑或纯白，视觉上始终是连续的深色。
+        view.backgroundColor = Self.pageBg
+
         webView = WKWebView(frame: view.bounds, configuration: cfg)
-        webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        webView.translatesAutoresizingMaskIntoConstraints = false
         webView.navigationDelegate = self
         webView.isOpaque = false
-        webView.backgroundColor = .black
-        // 真正全屏：让 WebView 铺满屏幕，安全区交给 HTML 的 env(safe-area-inset-*) 处理
+        webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
+        // 真正全屏：WebView 铺满整个屏幕（含刘海/底部 Home 指示条区域），
+        // 安全区交给 HTML 的 env(safe-area-inset-*) 处理。
         webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.scrollView.contentInset = .zero
+        webView.scrollView.scrollIndicatorInsets = .zero
         webView.scrollView.bounces = false
         webView.scrollView.showsVerticalScrollIndicator = false
         webView.scrollView.showsHorizontalScrollIndicator = false
         view.addSubview(webView)
+        // 用约束钉在 view 的四条边（注意是 view 不是 safeAreaLayoutGuide）——这是铺满全屏的关键。
+        // 若参照 safeAreaLayoutGuide，WebView 会被缩到安全区内，外面就露出黑边。
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: view.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
         engine.delegate = self
 
         if let url = Bundle.main.url(forResource: "player", withExtension: "html") {
@@ -48,14 +64,39 @@ final class ViewController: UIViewController, WKScriptMessageHandler, WKNavigati
         }
     }
 
-    // 安全区变化（横竖屏、灵动岛展开/收起）时重设 WebView frame，确保始终铺满全屏
-    override func viewSafeAreaInsetsDidChange() {
-        super.viewSafeAreaInsetsDidChange()
-        webView?.frame = view.bounds
+    /// 页面底色，与 player.html 的 --bg (#0b0d12) 保持一致
+    static let pageBg = UIColor(red: 11/255.0, green: 13/255.0, blue: 18/255.0, alpha: 1)
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // 等一帧，确保拿到最终布局再打点
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.logLayout()
+        }
     }
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        webView?.frame = view.bounds
+
+    // MARK: - 布局诊断（测试期用，项目完成后移除）
+
+    /// 把屏幕/窗口/WebView 的实际尺寸与安全区推给页面的运行日志面板。
+    ///
+    /// 为什么需要：App 若缺少 UILaunchScreen，iOS 会按"兼容模式"渲染（按宽度放大、上下补黑边），
+    /// 此时 `UIScreen.bounds` 会比机型真实逻辑尺寸小。用 `bounds × scale` 和 `nativeBounds`
+    /// 对比即可一眼判定是否铺满；nativeBounds 无论兼容与否都返回真实物理像素。
+    private func logLayout() {
+        let s = UIScreen.main
+        let w = s.bounds.width * s.scale
+        let h = s.bounds.height * s.scale
+        let full = abs(w - s.nativeBounds.width) < 1 && abs(h - s.nativeBounds.height) < 1
+        let msg = "[布局] " + (full ? "已铺满✅" : "未铺满❌(疑似兼容/letterbox模式)")
+            + " screen=\(Int(s.bounds.width))x\(Int(s.bounds.height))"
+            + " native=\(Int(s.nativeBounds.width))x\(Int(s.nativeBounds.height))"
+            + " scale=\(Int(s.scale))"
+            + " rendered=\(Int(w))x\(Int(h))"
+            + " view=\(Int(view.bounds.width))x\(Int(view.bounds.height))"
+            + " web=\(Int(webView.frame.width))x\(Int(webView.frame.height))"
+            + " safeTop=\(Int(view.safeAreaInsets.top)) safeBottom=\(Int(view.safeAreaInsets.bottom))"
+        SyncLog.step(msg)
+        engineLog(msg)
     }
 
     // MARK: - 曲库

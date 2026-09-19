@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="DPpv9roeMuih29vWzZLkJa">
+<head data-page-node-id="OKSrBRZy7O3CeSDEUGkZ4y">
+<meta charset="UTF-8" data-page-node-id="3mUApaD9O5tYSSVooD4SSm">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" data-page-node-id="MVdUclQ627qNRg9xnkjpmq">
+<title>全屏播放页预览</title>
+<style>
+:root{
+  --bg:#0b0d12; --panel:#12161e; --panel2:#171c26; --line:#232a37;
+  --txt:#e7ebf3; --txt2:#98a2b6; --txt3:#5f6982;
+  --acc:#6d8cff; --acc2:#a06bff; --ok:#3ecf8e; --warn:#ffb454; --err:#ff6b6b;
+  --bar:64px;
+  --sat:0px; --sab:0px; --sal:0px; --sar:0px;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;min-height:100dvh;overflow:hidden}
+body{background:#000;display:flex;align-items:center;justify-content:center}
+
+/* 手机模拟框 */
+.phone{
+  width:390px;height:844px;border-radius:44px;overflow:hidden;position:relative;
+  background:var(--bg);color:var(--txt);
+  font:15px/1.5 -apple-system,"Roboto","Noto Sans CJK SC","Microsoft YaHei",sans-serif;
+  box-shadow:0 30px 80px rgba(0,0,0,.6);
+}
+
+/* ===== 以下与原 player.html 全屏页相关样式一致 ===== */
+#full{
+  position:absolute;inset:0;background:var(--bg);z-index:50;
+  display:flex;flex-direction:column;
+  padding:var(--sat) calc(26px + var(--sar)) calc(10px + var(--sab)) calc(26px + var(--sal));
+  overflow:hidden;
+}
+#fullAura{
+  position:absolute;inset:0;z-index:0;pointer-events:none;
+  background:radial-gradient(120% 70% at 50% 8%, rgba(109,140,255,.22), transparent 60%);
+  transition:background .5s ease;
+}
+#full .ftext,#full .artwrap,#full .seekwrap,#full .fctrl,#full .fbot{position:relative;z-index:1}
+.artwrap{flex:1;display:flex;align-items:center;justify-content:center;min-height:0;padding:8px 0;position:relative}
+.art{
+  width:min(74vw,300px);aspect-ratio:1;border-radius:50%;position:relative;
+  background:conic-gradient(from 0deg,#232a37,#1a2030,#232a37);
+  animation:spin 14s linear infinite;animation-play-state:running;
+  box-shadow:
+    0 24px 70px rgba(0,0,0,.6),
+    0 8px 30px rgba(109,140,255,.14),
+    inset 0 0 0 1px rgba(255,255,255,.04);
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+.art::before{content:"";position:absolute;inset:0;border-radius:50%;
+  background:repeating-radial-gradient(circle at center,#0d1017 0 2px,#11151e 2px 4px,#0d1017 4px 6px);
+  box-shadow:inset 0 0 40px rgba(0,0,0,.75);}
+.art::after{content:"";position:absolute;inset:42%;border-radius:50%;
+  background:linear-gradient(135deg,var(--acc),var(--acc2));
+  box-shadow:0 0 24px rgba(109,140,255,.4), inset 0 0 0 2px rgba(255,255,255,.12);}
+.art .sheen{position:absolute;inset:0;border-radius:50%;z-index:2;pointer-events:none;
+  background:conic-gradient(from 210deg,transparent 0deg,rgba(255,255,255,.06) 40deg,transparent 90deg);}
+.art .hole{position:absolute;inset:46.5%;border-radius:50%;background:#0b0d12;z-index:3;
+  box-shadow:inset 0 0 3px rgba(0,0,0,.9), 0 0 0 1px rgba(255,255,255,.03);}
+#artimg{position:absolute;inset:0;border-radius:50%;background-size:cover;background-position:center;background-color:#1a2030;opacity:0;transition:opacity .4s;z-index:4;box-shadow:inset 0 0 0 1px rgba(255,255,255,.06)}
+.art.hascover #artimg{opacity:1}
+.art.hascover .sheen,.art.hascover .hole{opacity:0}
+
+.ftext{flex:none;text-align:center;padding:14px 0 6px}
+.ftext .ft{font-size:21px;font-weight:700;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ftext .fa{font-size:13px;color:var(--txt3);margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.metatip{font-size:11px;color:var(--acc2);margin-top:6px;min-height:0;opacity:0;transition:opacity .2s}
+.metatip.on{opacity:1}
+.ftrow{display:flex;align-items:center;justify-content:center;gap:12px}
+.ftrow .favbtn{width:38px;height:38px;font-size:24px;background:var(--panel2);border:1px solid var(--line);border-radius:50%}
+.favbtn{width:40px;height:40px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--txt2);font-size:20px}
+.favbtn.act{color:var(--err)}
+
+.seekwrap{flex:none;padding:2px 0 6px}
+.track{height:32px;display:flex;align-items:center;position:relative}
+.track .rail{height:5px;width:100%;background:#1c2230;border-radius:4px;overflow:visible;position:relative}
+.track .buf{position:absolute;left:0;top:0;bottom:0;background:#2a3243;width:0;border-radius:4px}
+.track .fill{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,var(--acc),var(--acc2));width:0;border-radius:4px}
+.track .knob{position:absolute;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 0 10px rgba(109,140,255,.6),0 2px 6px rgba(0,0,0,.5);left:0;transform:translateX(-50%)}
+.times{display:flex;justify-content:space-between;font-size:11.5px;color:var(--txt3);font-variant-numeric:tabular-nums;margin-top:2px}
+
+.fctrl{flex:none;display:flex;align-items:center;justify-content:space-between;padding:12px 2px 6px}
+.fbtn{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--txt2);background:transparent;position:relative}
+.fbtn svg{width:22px;height:22px;fill:currentColor}
+.fbtn.big{width:72px;height:72px;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;box-shadow:0 10px 30px rgba(109,140,255,.38), 0 0 0 6px rgba(109,140,255,.08)}
+.fbtn.big svg{width:28px;height:28px}
+.fbtn.act{color:var(--acc)}
+.fbtn .badge{position:absolute;bottom:6px;font-size:9px;font-weight:700}
+
+.fbot{flex:none;display:flex;align-items:center;gap:12px;padding:6px 0 18px;color:var(--txt3);font-size:12px}
+.fbot .vol{flex:1;height:22px;display:flex;align-items:center;position:relative}
+.fbot .vol .rail{height:3px;width:100%;background:#1e2431;border-radius:3px;position:relative;overflow:hidden}
+.fbot .vol .fill{position:absolute;left:0;top:0;bottom:0;background:var(--txt2);width:80%}
+</style>
+</head>
+<body data-page-node-id="HNJeBAE0IuDDvL7dAYB80U">
+<div class="phone" data-page-node-id="S90I87SfoawiNkNiGwxrO5">
+  <div id="full" class="show" data-page-node-id="D4OgpEwnzuBPm1FF0Lp97a">
+    <div id="fullAura" data-page-node-id="PQNRPnoH2VYVo1rmYrI9Ou"></div>
+    <div class="ftext" data-page-node-id="mEB1ttUQJlmbIvp80HXnPL">
+      <div class="ftrow" data-page-node-id="EXvgrIcSQH8jRiewORNd4H">
+        <div class="ft" id="ft" data-page-node-id="AHO3KktbRgGrqtutYAAJMF">夜曲</div>
+        <div class="favbtn act" id="fheart" data-page-node-id="5sSMU9eybROPVnwy1eNnp6">♥</div>
+      </div>
+      <div class="fa" id="fa" data-page-node-id="oTTSvOzFAEinz3fjMQGgpt">周杰伦 · 十一月的萧邦</div>
+      <div class="metatip on" id="metatip" data-page-node-id="jxM2avYAdAUJygAHj2etob"></div>
+    </div>
+    <div class="artwrap" data-page-node-id="lbPpaWAiD14Jm4oPGSgDfZ">
+      <div class="art hascover" id="art" data-page-node-id="iDLk7OQ2T9bwuBAVHa9UHP"><div id="artimg" data-page-node-id="CQB8aubUFOgbfBX1Meq7Nr"></div><div class="sheen" data-page-node-id="xgkti5bwivqibn7v4EqBPy"></div><div class="hole" data-page-node-id="wnmAeGNlgxnvPFJcO01fEx"></div></div>
+    </div>
+    <div class="seekwrap" data-page-node-id="AAGW60guiy14C8nMiyUbwu">
+      <div class="track" id="track" data-page-node-id="HK0cHHVFR5ZwxVOzwYmLy8">
+        <div class="rail" data-page-node-id="8kmM3FicjIriz8PDy5VXQT"><div class="buf" style="width:100%" data-page-node-id="58UV4VRdmG5EPiMT1eV7Ew"></div><div class="fill" style="width:38%" data-page-node-id="f0Wedqgiit4RLznupbV4VK"></div></div>
+        <div class="knob" style="left:38%" data-page-node-id="akIlr89cQHokMp53gAEX9d"></div>
+      </div>
+      <div class="times" data-page-node-id="hMykkeBOI9aMRr3O3AIGTg"><span data-page-node-id="SFLq683vYec8Sug1FmujOn">1:42</span><span data-page-node-id="odtgzJICl4xZZbEw4FEl4m">4:31</span></div>
+    </div>
+    <div class="fctrl" data-page-node-id="g33kJF1xOU4Da669C9h8DH">
+      <div class="fbtn" id="fmode" data-page-node-id="X8x4wnHulDBGC7ZOHdjzaB"><svg viewBox="0 0 24 24" data-page-node-id="VazmvamGGp79ttEcvlUxnj"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z" data-page-node-id="gGW30pVAPWp442UJcYkF0m"/></svg></div>
+      <div class="fbtn" id="fprev" data-page-node-id="mHfAXL4jIJuguzpebuvFpn"><svg viewBox="0 0 24 24" data-page-node-id="YNCWBfmgDed5NnIQipnSFS"><path d="M6 6h2.5v12H6zM20 6l-9 6 9 6z" data-page-node-id="OGuCGpBYetqkM0n1pTopBa"/></svg></div>
+      <div class="fbtn big" id="fplay" data-page-node-id="tQA43F5CPITrlaz5xBFxTt"><svg viewBox="0 0 24 24" data-page-node-id="uh9IoyIiK5ASThz9AhubdM"><path d="M6 5h4v14H6zM14 5h4v14h-4z" data-page-node-id="KUXHxpqBiSycjz26JrUVm4"/></svg></div>
+      <div class="fbtn" id="fnext" data-page-node-id="yS09BB8uYnwIflSFdCslxJ"><svg viewBox="0 0 24 24" data-page-node-id="dPXmYUgbG9J6CjAo7FwVTn"><path d="M15.5 6H18v12h-2.5zM4 6l9 6-9 6z" data-page-node-id="8IE3geSzmiRPLm9s8CYnsI"/></svg></div>
+      <div class="fbtn" id="flist" data-page-node-id="nrH8o3oOcxMBpYWfWBT8kU"><svg viewBox="0 0 24 24" data-page-node-id="lFkyFndO0qUH0YC1T8ILuB"><path d="M3 5h13v2H3zm0 6h13v2H3zm0 6h13v2H3zm16-9l3 3-3 3z" data-page-node-id="bYynYIl9xaIl2WMR6mhtpx"/></svg></div>
+    </div>
+    <div class="fbot" data-page-node-id="OWXAaew0XsjBO1iUYXVgMX">
+      <span data-page-node-id="OwwMEZiAmACweUEx5Zh27Q">🔈</span>
+      <div class="vol" id="vol" data-page-node-id="UTLEDYrgD8C1HZR11FHfGu"><div class="rail" data-page-node-id="z3FuU1iz9S9Gl0sBAVFeDh"><div class="fill" style="width:80%" data-page-node-id="LkANxFcMJhCBk0m7DMo6xX"></div></div></div>
+      <span data-page-node-id="vmMtIaGoiArLq7u2erVCxc">80%</span>
+    </div>
+  </div>
+</div>
+<script>
+// 用一张暖色渐变当封面，演示取色光晕
+var cover = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e08a5a"/><stop offset=".5" stop-color="#c05f7d"/><stop offset="1" stop-color="#5a3f8f"/></linearGradient></defs><rect width="300" height="300" fill="url(#g)"/></svg>'
+);
+document.getElementById('artimg').style.backgroundImage = 'url(' + cover + ')';
+
+// 取色光晕
+(function(){
+  var au = document.getElementById('fullAura');
+  var img = new Image();
+  img.onload = function(){
+    var c = document.createElement('canvas'); c.width=32; c.height=32;
+    var g = c.getContext('2d'); g.drawImage(img,0,0,32,32);
+    var d = g.getImageData(0,0,32,32).data;
+    var r=0,gg=0,b=0,n=0;
+    for(var i=0;i<d.length;i+=16){r+=d[i];gg+=d[i+1];b+=d[i+2];n++;}
+    r=Math.round(r/n);gg=Math.round(gg/n);b=Math.round(b/n);
+    au.style.background = 'radial-gradient(120% 72% at 50% 6%, rgba('+r+','+gg+','+b+',.34), transparent 62%),radial-gradient(90% 60% at 50% 30%, rgba('+r+','+gg+','+b+',.12), transparent 60%)';
+  };
+  img.src = cover;
+})();
+</script>
+</body>
+</html>

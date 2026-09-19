@@ -17,7 +17,7 @@
   --sar:env(safe-area-inset-right,0px);
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-html,body{height:100%;min-height:100dvh;overflow:hidden}
+html,body{height:100%;min-height:100dvh;overflow:hidden;background:var(--bg)}
 body{
   background:var(--bg);color:var(--txt);
   font:15px/1.5 -apple-system,"Roboto","Noto Sans CJK SC","Microsoft YaHei",sans-serif;
@@ -457,6 +457,23 @@ function boot(){
   render(true);
   updateHeader();
   fillInfo();
+  logViewport();
+}
+
+// 视口诊断（测试期用，项目完成后移除）：确认是否铺满、安全区是否生效
+function logViewport(){
+  try {
+    var cs = getComputedStyle(document.documentElement);
+    var sat = cs.getPropertyValue('--sat').trim() || '0px';
+    var sab = cs.getPropertyValue('--sab').trim() || '0px';
+    var dpr = window.devicePixelRatio || 1;
+    logLine('[视口] inner=' + window.innerWidth + 'x' + window.innerHeight
+          + ' screen=' + screen.width + 'x' + screen.height
+          + ' dpr=' + dpr
+          + ' 物理=' + Math.round(window.innerWidth*dpr) + 'x' + Math.round(window.innerHeight*dpr)
+          + ' 安全区top=' + sat + ' bottom=' + sab
+          + (sat === '0px' ? ' ⚠️安全区为0(viewport-fit未生效)' : ''));
+  } catch(e){}
 }
 
 // 首次启动、还没有任何曲目时，直接把登录抽屉推到用户面前

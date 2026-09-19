@@ -9,5 +9,33 @@ targets:
     platform: iOS
     sources:
       - path: FnOSMusic
+    # ⚠️ 必须把 Info.plist 的所有键在这里写全。
+    # XcodeGen 在 `xcodegen generate` 时会用本节 properties **重新生成** info.path 指向的文件；
+    # 之前只写了 path 没写 properties → 手写的键在 CI 构建时被整个覆盖掉，后果：
+    #   · UILaunchScreen 丢失 → iOS 认为 App 不支持当前机型 → 兼容(letterbox)模式 → 上下黑边
+    #   · UIBackgroundModes 丢失 → 后台音频/锁屏连播失效
+    #   · NSAppTransportSecurity 丢失 → 明文 HTTP 被 ATS 拦截
     info:
       path: FnOSMusic/Info.plist
+      properties:
+        CFBundleDisplayName: 飞牛音乐
+        CFBundleName: FnOSMusic
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundlePackageType: APPL
+        CFBundleDevelopmentRegion: en
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        LSRequiresIPhoneOS: true
+        UILaunchScreen:
+          UIColorName: LaunchBg
+        UIBackgroundModes:
+          - audio
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        UIStatusBarStyle: UIStatusBarStyleLightContent
+        UIViewControllerBasedStatusBarAppearance: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIRequiredDeviceCapabilities:
+          - arm64

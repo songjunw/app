@@ -20,6 +20,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         UIApplication.shared.beginReceivingRemoteControlEvents()
 
         let w = UIWindow(frame: UIScreen.main.bounds)
+        w.backgroundColor = ViewController.pageBg
         w.rootViewController = ViewController()
         w.makeKeyAndVisible()
         window = w
